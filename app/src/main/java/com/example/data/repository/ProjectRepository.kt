@@ -6,12 +6,6 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import com.example.data.db.*
 import com.example.ml.*
-import com.google.android.gms.tasks.Tasks
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.objects.DetectedObject
-import com.google.mlkit.vision.objects.ObjectDetection
-import com.google.mlkit.vision.objects.ObjectDetector
-import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -20,7 +14,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 class ProjectRepository(
     private val context: Context,
@@ -37,23 +30,6 @@ class ProjectRepository(
         if (existing != null) return existing
         return synchronized(this) {
             sharedTFLiteDetector ?: TFLiteObjectDetector(context).also { sharedTFLiteDetector = it }
-        }
-    }
-
-    @Volatile
-    private var mlKitStreamDetector: ObjectDetector? = null
-
-    private fun getMlKitDetector(): ObjectDetector {
-        val existing = mlKitStreamDetector
-        if (existing != null) return existing
-        return synchronized(this) {
-            mlKitStreamDetector ?: ObjectDetection.getClient(
-                ObjectDetectorOptions.Builder()
-                    .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
-                    .enableMultipleObjects()
-                    .enableClassification()
-                    .build()
-            ).also { mlKitStreamDetector = it }
         }
     }
 
@@ -1245,109 +1221,6 @@ class ProjectRepository(
                                     val cropFeat = featureExtractor.extractFeatures(cropBmp)
                                     val cropPred = trainer.predict(cropFeat)
                                     if (cropPred.confidence >= 0.20f) {
-                                        predLabel = cropPred.classLabel
-                                        predConf = cropPred.confidence
-                                        predIdx = cropPred.classIndex
-                                    }
-                                } finally {
-                                    cropBmp.recycle()
-                                }
-                            }
-                        } catch (_: Throwable) {}
-                    }
-
-                    regions.add(
-                        DetectedObjectRegion(
-                            classIndex = predIdx,
-                            classLabel = predLabel,
-                            confidence = predConf,
-                            boxLeftNorm = boxL,
-                            boxTopNorm = boxT,
-                            boxRightNorm = boxR,
-                            boxBottomNorm = boxB,
-                            regionTitle = predLabel
-                        )
-                    )
-                }
-
-                if (regions.isNotEmpty()) {
-                    if (!isMultiObject) {
-                        val primary = regions.first()
-                        lastTrackedSingleBox = floatArrayOf(
-                            primary.boxLeftNorm,
-                            primary.boxTopNorm,
-                            primary.boxRightNorm,
-                            primary.boxBottomNorm
-                        )
-                        val singleResult = fullImageResult.copy(
-                            classIndex = primary.classIndex,
-                            classLabel = primary.classLabel,
-                            confidence = primary.confidence
-                        )
-                        return Pair(singleResult, listOf(primary))
-                    } else {
-                        return Pair(fullImageResult, regions)
-                    }
-                }
-            }
-
-            // Fallback to ML Kit if TFLite model did not catch object
-            val detector = getMlKitDetector()
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
-            val task = detector.process(inputImage)
-            val detectedObjects: List<DetectedObject> = try {
-                Tasks.await(task, 300, TimeUnit.MILLISECONDS)
-            } catch (_: Throwable) {
-                emptyList()
-            }
-
-            val bw = bitmap.width.toFloat()
-            val bh = bitmap.height.toFloat()
-            val validObjects = detectedObjects.filter { obj ->
-                val r = obj.boundingBox
-                val objW = r.width().toFloat()
-                val objH = r.height().toFloat()
-                val areaRatio = (objW * objH) / (bw * bh)
-                areaRatio in 0.015f..0.85f && (objW / bw) <= 0.95f && (objH / bh) <= 0.95f
-            }
-
-            if (validObjects.isNotEmpty()) {
-                val objectsToProcess = if (isMultiObject) validObjects.take(3) else listOf(validObjects.first())
-                val regions = mutableListOf<DetectedObjectRegion>()
-
-                for (obj in objectsToProcess) {
-                    val rect = obj.boundingBox
-                    val rawL = (rect.left.toFloat() / bw).coerceIn(0.01f, 0.90f)
-                    val rawT = (rect.top.toFloat() / bh).coerceIn(0.01f, 0.90f)
-                    val minR = minOf(0.99f, rawL + 0.04f)
-                    val minB = minOf(0.99f, rawT + 0.04f)
-                    val rawR = (rect.right.toFloat() / bw).coerceIn(minR, 0.99f)
-                    val rawB = (rect.bottom.toFloat() / bh).coerceIn(minB, 0.99f)
-
-                    val refined = ObjectBoundaryRefiner.refineObjectBoundingBox(bitmap, rawL, rawT, rawR, rawB)
-                    val boxL = refined[0]
-                    val boxT = refined[1]
-                    val boxR = refined[2]
-                    val boxB = refined[3]
-
-                    var predLabel = fullImageResult.classLabel.ifBlank { "Object" }
-                    var predConf = fullImageResult.confidence
-                    var predIdx = fullImageResult.classIndex
-
-                    if (trainer.classLabels.isNotEmpty()) {
-                        try {
-                            val cropL = (boxL * bitmap.width).toInt().coerceIn(0, maxOf(0, bitmap.width - 24))
-                            val cropT = (boxT * bitmap.height).toInt().coerceIn(0, maxOf(0, bitmap.height - 24))
-                            val maxW = bitmap.width - cropL
-                            val maxH = bitmap.height - cropT
-                            if (maxW >= 16 && maxH >= 16) {
-                                val cropW = ((boxR - boxL) * bitmap.width).toInt().coerceIn(16, maxW)
-                                val cropH = ((boxB - boxT) * bitmap.height).toInt().coerceIn(16, maxH)
-                                val cropBmp = Bitmap.createBitmap(bitmap, cropL, cropT, cropW, cropH)
-                                try {
-                                    val cropFeat = featureExtractor.extractFeatures(cropBmp)
-                                    val cropPred = trainer.predict(cropFeat)
-                                    if (cropPred.confidence >= 0.15f) {
                                         predLabel = cropPred.classLabel
                                         predConf = cropPred.confidence
                                         predIdx = cropPred.classIndex

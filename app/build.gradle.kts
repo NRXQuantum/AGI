@@ -21,6 +21,10 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk {
+      abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+    }
   }
 
   signingConfigs {
@@ -104,9 +108,9 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
   implementation(libs.tensorflow.lite)
-  implementation(libs.mlkit.objectdetection)
-  implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
+  // implementation(libs.mlkit.objectdetection)
+  // implementation(libs.converter.moshi)
+  // implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
 
@@ -116,15 +120,15 @@ dependencies {
   // implementation(libs.androidx.credentials)
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)
-  implementation(libs.firebase.appcheck.recaptcha)
-  implementation(libs.firebase.appcheck.debug)
+  // implementation(libs.firebase.appcheck.recaptcha)
+  // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
-  implementation(libs.okhttp)
+  // implementation(libs.logging.interceptor)
+  // implementation(libs.moshi.kotlin)
+  // implementation(libs.okhttp)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
+  // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -142,5 +146,5 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+  // "ksp"(libs.moshi.kotlin.codegen)
 }

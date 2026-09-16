@@ -135,9 +135,8 @@ class TFLiteObjectDetector(
     }
 
     private fun loadModel() {
-        // Preferred candidate models in order of device compatibility:
+        // Preferred YOLOX-Nano model
         val modelCandidates = listOf(
-            "yolox_nano_fp32.tflite",
             "yolox_nano.tflite"
         )
 
