@@ -864,10 +864,10 @@ class ProjectRepository(
         val featureExtractor = getSharedFeatureExtractor()
 
         if (model == null) {
-            // Out-of-the-box Base Mode: Real-Time On-Device SSD MobileNet (COCO 80 categories)
+            // Out-of-the-box Base Mode: Real-Time On-Device YOLOX-Nano (COCO 80 categories)
             val startMs = System.currentTimeMillis()
             val tfliteDetector = getTFLiteDetector()
-            val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.18f)
+            val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.22f)
             val elapsed = System.currentTimeMillis() - startMs
 
             if (detections.isNotEmpty()) {
@@ -910,7 +910,7 @@ class ProjectRepository(
             } else {
                 return@withContext PredictionResult(
                     classIndex = 0,
-                    classLabel = "Scanning... (80 COCO Objects Ready)",
+                    classLabel = "Scanning... (YOLOX-Nano 80 COCO Objects Ready)",
                     confidence = 0f,
                     allProbabilities = emptyList(),
                     inferenceTimeMs = elapsed,
@@ -1162,7 +1162,7 @@ class ProjectRepository(
 
     /**
      * High-Precision Real-Time Object Detection & Tracking Engine.
-     * Powered by on-device SSD MobileNet (COCO 80) with millisecond latency,
+     * Powered by on-device YOLOX-Nano (COCO 80) with millisecond latency,
      * sub-pixel ObjectBoundaryRefiner contour snapping, and on-device transfer learning classification.
      * Snaps bounding boxes snugly around physical objects (eliminating oversized floor/shadow leakage)
      * and accurately recognizes cell phones, remotes, cups, bottles, books, and user-trained objects.
