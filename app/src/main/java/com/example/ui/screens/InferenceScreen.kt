@@ -435,36 +435,6 @@ fun InferenceScreen(
                                                 color = MaterialTheme.colorScheme.primary
                                             )
                                         }
-                                    } else {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Icon(
-                                                    if (isFaceMode) Icons.Default.Face else Icons.Default.CheckCircle,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    text = if (isFaceMode) "Face ID ready (Train to enroll faces)" else "Built-in 80 COCO Detector Active",
-                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                            TextButton(
-                                                onClick = onNavigateToTrain,
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(if (isFaceMode) "Calibrate Now" else "Train Custom", style = MaterialTheme.typography.labelSmall)
-                                            }
-                                        }
                                     }
                                 }
                                 InferenceEngineMode.EXPORTED_TFLITE -> {

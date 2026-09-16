@@ -14,8 +14,8 @@ import kotlin.math.min
  * - At high speed (panning/moving): dynamically increases cutoff frequency to eliminate lag and overshoot.
  */
 class OneEuroFilter(
-    private val minCutoff: Float = 1.0f,  // Base cutoff frequency in Hz when stationary (suppresses jitter)
-    private val beta: Float = 0.035f,     // Speed coefficient for fluid responsiveness during motion
+    private val minCutoff: Float = 1.2f,  // Base cutoff frequency in Hz when stationary (clean jitter suppression)
+    private val beta: Float = 0.025f,     // Speed coefficient for direct, responsive motion
     private val dCutoff: Float = 1.0f     // Derivative cutoff frequency in Hz
 ) {
     private var xPrev = 0f
@@ -198,8 +198,34 @@ class CctvKalmanTracker(
      */
     fun processFrame(
         detections: List<LiveDetectedBox>,
-        timestampMs: Long = System.currentTimeMillis()
+        timestampMs: Long = System.currentTimeMillis(),
+        isSingleMode: Boolean = false
     ): List<LiveDetectedBox> {
+        // Single Object Mode: Strictly maintain at most ONE track
+        if (isSingleMode) {
+            if (detections.isEmpty()) {
+                if (tracks.isNotEmpty()) {
+                    tracks[0].predict(timestampMs)
+                    if (tracks[0].timeSinceUpdate > 3) {
+                        tracks.clear()
+                    }
+                }
+                return tracks.map { it.toLiveDetectedBox() }
+            }
+
+            val singleDet = detections.maxByOrNull { it.confidence } ?: detections.first()
+            if (tracks.isEmpty()) {
+                tracks.add(KalmanBoxTrack(id = 1, initialBox = singleDet, timestampMs = timestampMs))
+            } else {
+                // Keep only the single track
+                while (tracks.size > 1) {
+                    tracks.removeAt(tracks.lastIndex)
+                }
+                tracks[0].update(singleDet, timestampMs)
+            }
+            return listOf(tracks[0].toLiveDetectedBox())
+        }
+
         // 1. Prediction Phase for all active tracks
         for (track in tracks) {
             track.predict(timestampMs)

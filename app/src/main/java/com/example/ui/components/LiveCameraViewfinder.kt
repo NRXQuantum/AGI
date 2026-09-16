@@ -157,7 +157,7 @@ fun LiveCameraViewfinder(
 
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 val now = System.currentTimeMillis()
-                if (selectedMode != CameraTestMode.CAPTURE && now - lastAnalysisTimestamp >= 30 && !isAnalyzing) {
+                if (selectedMode != CameraTestMode.CAPTURE && now - lastAnalysisTimestamp >= 33 && !isAnalyzing) {
                     lastAnalysisTimestamp = now
                     isAnalyzing = true
                     try {
@@ -192,7 +192,11 @@ fun LiveCameraViewfinder(
                                     }
                                     box.copy(color = boxCol)
                                 }
-                                val smoothed = cctvKalmanTracker.processFrame(coloredBoxes, System.currentTimeMillis())
+                                val smoothed = cctvKalmanTracker.processFrame(
+                                    detections = if (isMulti) coloredBoxes else coloredBoxes.take(1),
+                                    timestampMs = System.currentTimeMillis(),
+                                    isSingleMode = !isMulti
+                                )
                                 withContext(Dispatchers.Main) {
                                     liveSingleResult = singlePred
                                     liveMultiBoxes = coloredBoxes
@@ -390,7 +394,7 @@ fun LiveCameraViewfinder(
                 // If single object box is present, render dynamic tracking bounding box!
                 if (smoothedBoxes.isNotEmpty()) {
                     DynamicBoundingBoxesOverlay(
-                        boxes = smoothedBoxes,
+                        boxes = smoothedBoxes.take(1),
                         frameWidth = frameWidth,
                         frameHeight = frameHeight
                     )
@@ -857,44 +861,10 @@ private fun SmoothTrackedBox(
     screenH: androidx.compose.ui.unit.Dp,
     density: androidx.compose.ui.unit.Density
 ) {
-    // 60 FPS Fluid Spring Interpolation: tracks camera motion smoothly without stutter
-    val animLeft by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = box.leftNorm,
-        animationSpec = androidx.compose.animation.core.spring(
-            stiffness = 1000f,
-            dampingRatio = 0.92f
-        ),
-        label = "boxLeft"
-    )
-    val animTop by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = box.topNorm,
-        animationSpec = androidx.compose.animation.core.spring(
-            stiffness = 1000f,
-            dampingRatio = 0.92f
-        ),
-        label = "boxTop"
-    )
-    val animRight by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = box.rightNorm,
-        animationSpec = androidx.compose.animation.core.spring(
-            stiffness = 1000f,
-            dampingRatio = 0.92f
-        ),
-        label = "boxRight"
-    )
-    val animBottom by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = box.bottomNorm,
-        animationSpec = androidx.compose.animation.core.spring(
-            stiffness = 1000f,
-            dampingRatio = 0.92f
-        ),
-        label = "boxBottom"
-    )
-
-    val rawLeft = offsetX + animLeft * renderedW
-    val rawTop = offsetY + animTop * renderedH
-    val rawRight = offsetX + animRight * renderedW
-    val rawBottom = offsetY + animBottom * renderedH
+    val rawLeft = offsetX + box.leftNorm * renderedW
+    val rawTop = offsetY + box.topNorm * renderedH
+    val rawRight = offsetX + box.rightNorm * renderedW
+    val rawBottom = offsetY + box.bottomNorm * renderedH
 
     val left = rawLeft.coerceIn(0f, maxOf(0f, wPx - 12f))
     val top = rawTop.coerceIn(0f, maxOf(0f, hPx - 12f))
