@@ -745,9 +745,9 @@ class ProjectRepository(
         if (isFaceMode) {
             val startMs = System.currentTimeMillis()
             val faceEngine = FaceRecognitionEngine(context)
-            val faceBoxes = faceEngine.detectFaces(bitmap, maxFaces = if (isMultiObject) 8 else 1)
 
             if (model == null) {
+                val faceBoxes = faceEngine.detectFaces(bitmap, maxFaces = if (isMultiObject) 8 else 1)
                 val detectedRegions = mutableListOf<DetectedObjectRegion>()
                 if (faceBoxes.isNotEmpty()) {
                     for ((idx, box) in faceBoxes.withIndex()) {
@@ -778,82 +778,51 @@ class ProjectRepository(
             }
 
             val trainer = getOrLoadTrainer(model, projectId)
-
-            val detectedRegions = mutableListOf<DetectedObjectRegion>()
-            var bestLabel = "No Face Detected"
-            var bestConf = 0f
-
-            if (faceBoxes.isNotEmpty()) {
-                for ((idx, box) in faceBoxes.withIndex()) {
-                    val emb = faceEngine.extractFaceEmbedding(bitmap, box)
-
-                    // Compute cosine similarity with each enrolled class
-                    var bestClassIdx = -1
-                    var highestCosineSim = -1f
-
-                    for (c in 0 until trainer.numClasses) {
-                        var dot = 0f
-                        var normW = 0f
-                        var normE = 0f
-                        for (f in 0 until trainer.featureDim) {
-                            val wVal = trainer.weights[c][f]
-                            val eVal = emb[f]
-                            dot += wVal * eVal
-                            normW += wVal * wVal
-                            normE += eVal * eVal
-                        }
-                        val sim = if (normW > 1e-6f && normE > 1e-6f) {
-                            (dot / (kotlin.math.sqrt(normW) * kotlin.math.sqrt(normE))).coerceIn(0f, 1f)
-                        } else 0f
-
-                        if (sim > highestCosineSim) {
-                            highestCosineSim = sim
-                            bestClassIdx = c
-                        }
-                    }
-
-                    val isMatch = (bestClassIdx >= 0 && highestCosineSim >= currentFaceMatchThreshold)
-                    val recognizedName = if (isMatch) {
-                        trainer.classLabels.getOrElse(bestClassIdx) { "Person ${bestClassIdx + 1}" }
-                    } else {
-                        "Unknown Person"
-                    }
-                    val displayConf = if (highestCosineSim >= 0f) highestCosineSim else 0f
-
-                    if (idx == 0 || displayConf > bestConf) {
-                        bestLabel = recognizedName
-                        bestConf = displayConf
-                    }
-
-                    detectedRegions.add(
-                        DetectedObjectRegion(
-                            classIndex = if (bestClassIdx >= 0) bestClassIdx else 0,
-                            classLabel = recognizedName,
-                            confidence = displayConf,
-                            boxLeftNorm = box.leftNorm,
-                            boxTopNorm = box.topNorm,
-                            boxRightNorm = box.rightNorm,
-                            boxBottomNorm = box.bottomNorm,
-                            regionTitle = recognizedName
-                        )
-                    )
+            val enrolledList = trainer.classLabels.mapIndexed { cIdx, label ->
+                val centroid = FloatArray(trainer.featureDim) { f ->
+                    trainer.weights[cIdx][f] / 8.0f
                 }
-            } else {
-                // When no face is detected in the image/camera frame, do not hallucinate
-                bestLabel = "No Face Detected"
-                bestConf = 0f
+                EnrolledPerson(
+                    id = cIdx.toLong(),
+                    name = label,
+                    faceSamplePaths = emptyList(),
+                    centroidEmbedding = centroid
+                )
             }
+
+            val identified = faceEngine.identifyHumansInScene(
+                sceneBitmap = bitmap,
+                enrolledPersons = enrolledList,
+                matchThreshold = currentFaceMatchThreshold
+            )
+
+            val detectedRegions = identified.mapIndexed { idx, person ->
+                DetectedObjectRegion(
+                    classIndex = if (person.personId >= 0) person.personId.toInt() else idx,
+                    classLabel = person.personName,
+                    confidence = person.confidence,
+                    boxLeftNorm = person.boundingBox.leftNorm,
+                    boxTopNorm = person.boundingBox.topNorm,
+                    boxRightNorm = person.boundingBox.rightNorm,
+                    boxBottomNorm = person.boundingBox.bottomNorm,
+                    regionTitle = "${person.personName} (${person.matchType})"
+                )
+            }
+
+            val topPerson = identified.firstOrNull()
+            val bestLabel = if (identified.isEmpty()) "No Person Detected" else (topPerson?.personName ?: "Unknown Person")
+            val bestConf = topPerson?.confidence ?: 0f
 
             faceEngine.close()
             val inferenceTime = System.currentTimeMillis() - startMs
 
             return@withContext PredictionResult(
-                classIndex = 0,
+                classIndex = topPerson?.personId?.toInt() ?: 0,
                 classLabel = bestLabel,
                 confidence = bestConf,
-                allProbabilities = emptyList(),
+                allProbabilities = identified.map { ClassConfidence(it.personId.toInt(), it.personName, it.confidence) },
                 inferenceTimeMs = inferenceTime,
-                detectedObjects = detectedRegions
+                detectedObjects = if (isMultiObject) detectedRegions else detectedRegions.take(1)
             )
         }
 
@@ -1198,6 +1167,15 @@ class ProjectRepository(
                 }
 
                 val regions = mutableListOf<DetectedObjectRegion>()
+                // Check if project classes are person names / people labels
+                val isPersonProject = trainer.classLabels.any {
+                    it.contains("person", ignoreCase = true) ||
+                    it.contains("face", ignoreCase = true) ||
+                    it.contains("human", ignoreCase = true) ||
+                    it.contains("man", ignoreCase = true) ||
+                    it.contains("woman", ignoreCase = true)
+                }
+
                 for (det in selectedDetections) {
                     val boxL = det.leftNorm
                     val boxT = det.topNorm
@@ -1208,33 +1186,40 @@ class ProjectRepository(
                     var predConf = det.score
                     var predIdx = det.classIndex
 
-                    // If user trained custom classes in this project, classify the cropped physical object
-                    if (trainer.isTrained && trainer.classLabels.isNotEmpty()) {
-                        try {
-                            val cropL = (boxL * bitmap.width).toInt().coerceIn(0, maxOf(0, bitmap.width - 24))
-                            val cropT = (boxT * bitmap.height).toInt().coerceIn(0, maxOf(0, bitmap.height - 24))
-                            val maxW = bitmap.width - cropL
-                            val maxH = bitmap.height - cropT
-                            if (maxW >= 16 && maxH >= 16) {
-                                val desiredW = ((boxR - boxL) * bitmap.width).toInt()
-                                val desiredH = ((boxB - boxT) * bitmap.height).toInt()
-                                val cropW = desiredW.coerceIn(16, maxW)
-                                val cropH = desiredH.coerceIn(16, maxH)
+                    val isDetPerson = (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true))
 
-                                val cropBmp = Bitmap.createBitmap(bitmap, cropL, cropT, cropW, cropH)
-                                try {
-                                    val cropFeat = featureExtractor.extractFeatures(cropBmp)
-                                    val cropPred = trainer.predict(cropFeat)
-                                    if (cropPred.confidence >= 0.20f) {
-                                        predLabel = cropPred.classLabel
-                                        predConf = cropPred.confidence
-                                        predIdx = cropPred.classIndex
+                    // If user trained custom classes in this project:
+                    // If project is about people, ONLY classify regions that are actually Persons!
+                    // Inanimate objects (chair, table, cup, bottle) keep their real object identity.
+                    if (trainer.isTrained && trainer.classLabels.isNotEmpty()) {
+                        val shouldClassify = if (isPersonProject) isDetPerson else true
+                        if (shouldClassify) {
+                            try {
+                                val cropL = (boxL * bitmap.width).toInt().coerceIn(0, maxOf(0, bitmap.width - 24))
+                                val cropT = (boxT * bitmap.height).toInt().coerceIn(0, maxOf(0, bitmap.height - 24))
+                                val maxW = bitmap.width - cropL
+                                val maxH = bitmap.height - cropT
+                                if (maxW >= 16 && maxH >= 16) {
+                                    val desiredW = ((boxR - boxL) * bitmap.width).toInt()
+                                    val desiredH = ((boxB - boxT) * bitmap.height).toInt()
+                                    val cropW = desiredW.coerceIn(16, maxW)
+                                    val cropH = desiredH.coerceIn(16, maxH)
+
+                                    val cropBmp = Bitmap.createBitmap(bitmap, cropL, cropT, cropW, cropH)
+                                    try {
+                                        val cropFeat = featureExtractor.extractFeatures(cropBmp)
+                                        val cropPred = trainer.predict(cropFeat)
+                                        if (cropPred.confidence >= 0.25f) {
+                                            predLabel = cropPred.classLabel
+                                            predConf = cropPred.confidence
+                                            predIdx = cropPred.classIndex
+                                        }
+                                    } finally {
+                                        cropBmp.recycle()
                                     }
-                                } finally {
-                                    cropBmp.recycle()
                                 }
-                            }
-                        } catch (_: Throwable) {}
+                            } catch (_: Throwable) {}
+                        }
                     }
 
                     regions.add(

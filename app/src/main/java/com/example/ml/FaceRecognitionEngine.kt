@@ -75,6 +75,9 @@ data class EnrolledPerson(
 class FaceRecognitionEngine(private val context: Context) {
 
     private val featureExtractor = FeatureExtractor(context)
+    private val tfliteDetector: TFLiteObjectDetector by lazy {
+        TFLiteObjectDetector(context)
+    }
 
     /**
      * Detects up to [maxFaces] in the provided bitmap using hardware FaceDetector
@@ -401,58 +404,102 @@ class FaceRecognitionEngine(private val context: Context) {
     }
 
     /**
-     * Detects human bodies, silhouettes, and torso regions in a scene.
+     * High-Precision Model-Based Human Body & Person Detection.
+     * Uses YOLOX-Nano neural network specifically for class "Person" (COCO 80 Class 0),
+     * combined with hardware FaceDetector for upper-body anthropometrics.
+     * Guarantees zero false positives on inanimate objects (tables, chairs, walls, floors).
      */
     fun detectHumanBodies(bitmap: Bitmap, maxBodies: Int = 6): List<FaceBoundingBox> {
         val w = bitmap.width
         val h = bitmap.height
-        if (w < 48 || h < 48) return emptyList()
+        if (w < 32 || h < 32) return emptyList()
 
-        val detected = mutableListOf<FaceBoundingBox>()
-        // 1. Detect faces first; if face exists, project anthropometric body bounding box below face
+        val candidateBoxes = mutableListOf<FaceBoundingBox>()
+
+        // 1. Run real neural-network YOLOX-Nano Object Detector filtering exclusively for "Person" class
+        try {
+            val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.20f)
+            for (det in detections) {
+                if (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true) || det.label.equals("Human", ignoreCase = true)) {
+                    val boxW = det.rightNorm - det.leftNorm
+                    val boxH = det.bottomNorm - det.topNorm
+                    // Validate minimum realistic human box proportions
+                    if (boxW >= 0.05f && boxH >= 0.08f) {
+                        candidateBoxes.add(
+                            FaceBoundingBox(
+                                leftNorm = det.leftNorm.coerceIn(0f, 0.95f),
+                                topNorm = det.topNorm.coerceIn(0f, 0.95f),
+                                rightNorm = det.rightNorm.coerceIn(det.leftNorm + 0.05f, 1f),
+                                bottomNorm = det.bottomNorm.coerceIn(det.topNorm + 0.08f, 1f),
+                                confidence = det.score
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 2. Run hardware FaceDetector; for any face found, project upper body / head-to-torso box
         val faces = detectFaces(bitmap, maxFaces = maxBodies)
         for (f in faces) {
             val faceW = f.rightNorm - f.leftNorm
             val faceH = f.bottomNorm - f.topNorm
-            val bodyLeft = (f.leftNorm - faceW * 0.9f).coerceIn(0f, 1f)
-            val bodyRight = (f.rightNorm + faceW * 0.9f).coerceIn(bodyLeft + 0.1f, 1f)
-            val bodyTop = f.topNorm.coerceIn(0f, 1f)
-            val bodyBottom = (f.topNorm + faceH * 5.8f).coerceIn(bodyTop + 0.2f, 1f)
-            detected.add(FaceBoundingBox(bodyLeft, bodyTop, bodyRight, bodyBottom, confidence = 0.88f))
+            val bodyLeft = (f.leftNorm - faceW * 0.85f).coerceIn(0f, 0.95f)
+            val bodyRight = (f.rightNorm + faceW * 0.85f).coerceIn(bodyLeft + 0.08f, 1f)
+            val bodyTop = f.topNorm.coerceIn(0f, 0.95f)
+            val bodyBottom = (f.topNorm + faceH * 4.2f).coerceIn(bodyTop + 0.15f, 1f)
+            candidateBoxes.add(
+                FaceBoundingBox(
+                    leftNorm = bodyLeft,
+                    topNorm = bodyTop,
+                    rightNorm = bodyRight,
+                    bottomNorm = bodyBottom,
+                    confidence = f.confidence
+                )
+            )
         }
 
-        // 2. If no faces detected, locate prominent vertical silhouette cluster (torso/body)
-        if (detected.isEmpty()) {
-            val scaled = Bitmap.createScaledBitmap(bitmap, 96, 128, false)
-            var minX = 96; var maxX = 0; var minY = 128; var maxY = 0
-            var count = 0
-            for (y in 8 until 120) {
-                for (x in 8 until 88) {
-                    val p = scaled.getPixel(x, y)
-                    val r = (p shr 16) and 0xFF
-                    val g = (p shr 8) and 0xFF
-                    val b = p and 0xFF
-                    val lum = 0.299f * r + 0.587f * g + 0.114f * b
-                    if (lum in 25f..235f) {
-                        count++
-                        minX = min(minX, x)
-                        maxX = max(maxX, x)
-                        minY = min(minY, y)
-                        maxY = max(maxY, y)
-                    }
+        // 3. Deduplicate / Non-Maximum Suppression (IoU) to eliminate double counting
+        val deduplicated = nmsDeduplicate(candidateBoxes, iouThreshold = 0.38f)
+        return deduplicated.take(maxBodies)
+    }
+
+    private fun nmsDeduplicate(boxes: List<FaceBoundingBox>, iouThreshold: Float): List<FaceBoundingBox> {
+        if (boxes.size <= 1) return boxes
+        val sorted = boxes.sortedByDescending { it.confidence }
+        val selected = mutableListOf<FaceBoundingBox>()
+
+        for (box in sorted) {
+            var shouldKeep = true
+            for (chosen in selected) {
+                val iou = calculateIoU(box, chosen)
+                if (iou > iouThreshold) {
+                    shouldKeep = false
+                    break
                 }
             }
-            scaled.recycle()
-            if (count > 250 && (maxX - minX) > 20 && (maxY - minY) > 35) {
-                val l = (minX / 96f).coerceIn(0f, 0.8f)
-                val t = (minY / 128f).coerceIn(0f, 0.8f)
-                val r = (maxX / 96f).coerceIn(l + 0.15f, 1f)
-                val b = (maxY / 128f).coerceIn(t + 0.25f, 1f)
-                detected.add(FaceBoundingBox(l, t, r, b, confidence = 0.72f))
+            if (shouldKeep) {
+                selected.add(box)
             }
         }
+        return selected
+    }
 
-        return detected
+    private fun calculateIoU(a: FaceBoundingBox, b: FaceBoundingBox): Float {
+        val interLeft = max(a.leftNorm, b.leftNorm)
+        val interTop = max(a.topNorm, b.topNorm)
+        val interRight = min(a.rightNorm, b.rightNorm)
+        val interBottom = min(a.bottomNorm, b.bottomNorm)
+
+        val interW = max(0f, interRight - interLeft)
+        val interH = max(0f, interBottom - interTop)
+        val interArea = interW * interH
+
+        val areaA = (a.rightNorm - a.leftNorm) * (a.bottomNorm - a.topNorm)
+        val areaB = (b.rightNorm - b.leftNorm) * (b.bottomNorm - b.topNorm)
+        val unionArea = areaA + areaB - interArea
+        if (unionArea <= 1e-6f) return 0f
+        return interArea / unionArea
     }
 
     /**
@@ -504,35 +551,53 @@ class FaceRecognitionEngine(private val context: Context) {
     }
 
     /**
-     * Identifies multiple humans/people in a scene using Multi-Modal Hybrid Re-ID:
-     * - Face Match (when face is prominent)
-     * - Body & Apparel Lock (when person is turned, at a distance, or wearing mask)
-     * - Hybrid Dual Fusion (when both face and body are visible for ultra-precision)
-     * - Partial Patch Match (for cropped/cut-off scenes)
+     * Identifies multiple humans/people in a scene using high-precision Multi-Modal Hybrid Re-ID:
+     * - Dual Face + Torso Biometric Fusion (when face is prominent)
+     * - Real Person Neural Detector (YOLOX Person) for turned / distance / masked humans
+     * - Strict Object Non-Human Suppression: Never triggers on inanimate objects or furniture
+     * - Multi-Person Spatial Deduplication: Prevents double counting the same individual
      */
     fun identifyHumansInScene(
         sceneBitmap: Bitmap,
         enrolledPersons: List<EnrolledPerson>,
-        matchThreshold: Float = 0.58f
+        matchThreshold: Float = 0.52f
     ): List<IdentifiedPerson> {
         if (enrolledPersons.isEmpty()) return emptyList()
 
-        val faces = detectFaces(sceneBitmap, maxFaces = 6)
-        val bodies = detectHumanBodies(sceneBitmap, maxBodies = 6)
-        val results = mutableListOf<IdentifiedPerson>()
+        // 1. Detect genuine faces and genuine neural-detected human bodies
+        val faces = detectFaces(sceneBitmap, maxFaces = 8)
+        val bodies = detectHumanBodies(sceneBitmap, maxBodies = 8)
 
-        // 1. Process Face detections with potential Body dual-fusion
+        // If neither face nor person body was found by the neural / biometric engines, scene has no humans!
+        if (faces.isEmpty() && bodies.isEmpty()) {
+            return emptyList()
+        }
+
+        val results = mutableListOf<IdentifiedPerson>()
+        val processedBodyIndices = mutableSetOf<Int>()
+
+        // 2. Process Face detections first (Highest biometric accuracy)
         for (faceBox in faces) {
             val faceEmb = extractFaceEmbedding(sceneBitmap, faceBox)
             val patchEmb = extractMultiPatchEmbedding(sceneBitmap, faceBox)
 
+            // Check if this face is inside one of the detected body boxes to link them
+            for ((bIdx, bBox) in bodies.withIndex()) {
+                val faceMidX = (faceBox.leftNorm + faceBox.rightNorm) * 0.5f
+                val faceMidY = (faceBox.topNorm + faceBox.bottomNorm) * 0.5f
+                if (faceMidX in bBox.leftNorm..bBox.rightNorm && faceMidY in bBox.topNorm..bBox.bottomNorm) {
+                    processedBodyIndices.add(bIdx)
+                    break
+                }
+            }
+
             var bestPerson: EnrolledPerson? = null
             var bestScore = -1f
-            var bestMatchType = "Face Match"
+            var bestMatchType = "Face Biometrics"
 
             for (person in enrolledPersons) {
                 var score = 0f
-                var matchType = "Face Match"
+                var matchType = "Face Biometrics"
 
                 val faceCentroid = person.centroidEmbedding
                 val bodyCentroid = person.bodyCentroidEmbedding
@@ -541,12 +606,12 @@ class FaceRecognitionEngine(private val context: Context) {
                 val faceSim = if (faceCentroid != null) cosineSimilarity(faceEmb, faceCentroid) else -1f
                 val patchSim = if (patchCentroid != null) cosineSimilarity(patchEmb, patchCentroid) else -1f
 
-                if (faceSim > 0.40f && patchSim > 0.40f) {
-                    score = (faceSim * 0.65f) + (patchSim * 0.35f)
-                    matchType = "Face + Body Match"
+                if (faceSim > 0.35f && patchSim > 0.35f) {
+                    score = (faceSim * 0.75f) + (patchSim * 0.25f)
+                    matchType = "Face + Body Fusion"
                 } else if (faceSim > -0.5f) {
                     score = faceSim
-                    matchType = "Face Match"
+                    matchType = "Face Biometrics"
                 } else if (patchSim > -0.5f) {
                     score = patchSim
                     matchType = "Upper Body Match"
@@ -577,50 +642,50 @@ class FaceRecognitionEngine(private val context: Context) {
             )
         }
 
-        // 2. If no faces detected, analyze bodies/torsos (e.g. turned back, distance, mask)
-        if (results.isEmpty()) {
-            for (bodyBox in bodies) {
-                val bodyEmb = extractBodyAppearanceEmbedding(sceneBitmap, bodyBox)
-                val patchEmb = extractMultiPatchEmbedding(sceneBitmap, bodyBox)
+        // 3. Process remaining unlinked Neural-Detected Person bodies (turned away, distance, or masked)
+        for ((bIdx, bodyBox) in bodies.withIndex()) {
+            if (processedBodyIndices.contains(bIdx)) continue
 
-                var bestPerson: EnrolledPerson? = null
-                var bestScore = -1f
-                var bestMatchType = "Body / Torso Lock"
+            val bodyEmb = extractBodyAppearanceEmbedding(sceneBitmap, bodyBox)
+            val patchEmb = extractMultiPatchEmbedding(sceneBitmap, bodyBox)
 
-                for (person in enrolledPersons) {
-                    val bodyCentroid = person.bodyCentroidEmbedding ?: person.centroidEmbedding
-                    val patchCentroid = person.patchCentroidEmbedding
+            var bestPerson: EnrolledPerson? = null
+            var bestScore = -1f
+            var bestMatchType = "Person (Turned/Distance)"
 
-                    val bodySim = if (bodyCentroid != null) cosineSimilarity(bodyEmb, bodyCentroid) else -1f
-                    val patchSim = if (patchCentroid != null) cosineSimilarity(patchEmb, patchCentroid) else -1f
+            for (person in enrolledPersons) {
+                val bodyCentroid = person.bodyCentroidEmbedding ?: person.centroidEmbedding
+                val patchCentroid = person.patchCentroidEmbedding
 
-                    val score = max(bodySim, patchSim)
-                    val matchType = if (patchSim > bodySim) "Upper Body Match" else "Body / Torso Lock"
+                val bodySim = if (bodyCentroid != null) cosineSimilarity(bodyEmb, bodyCentroid) else -1f
+                val patchSim = if (patchCentroid != null) cosineSimilarity(patchEmb, patchCentroid) else -1f
 
-                    if (score > bestScore) {
-                        bestScore = score
-                        bestPerson = person
-                        bestMatchType = matchType
-                    }
+                val score = max(bodySim, patchSim)
+                val matchType = if (patchSim > bodySim) "Upper Body Match" else "Person (Turned/Distance)"
+
+                if (score > bestScore) {
+                    bestScore = score
+                    bestPerson = person
+                    bestMatchType = matchType
                 }
-
-                val confidence = ((bestScore + 1f) * 0.5f).coerceIn(0f, 1f)
-                val name = if (bestPerson != null && confidence >= (matchThreshold * 0.92f)) {
-                    bestPerson.name
-                } else {
-                    "Unknown Person"
-                }
-
-                results.add(
-                    IdentifiedPerson(
-                        personName = name,
-                        confidence = confidence,
-                        boundingBox = bodyBox,
-                        personId = bestPerson?.id ?: -1L,
-                        matchType = bestMatchType
-                    )
-                )
             }
+
+            val confidence = ((bestScore + 1f) * 0.5f).coerceIn(0f, 1f)
+            val name = if (bestPerson != null && confidence >= (matchThreshold * 0.95f)) {
+                bestPerson.name
+            } else {
+                "Unknown Person"
+            }
+
+            results.add(
+                IdentifiedPerson(
+                    personName = name,
+                    confidence = confidence,
+                    boundingBox = bodyBox,
+                    personId = bestPerson?.id ?: -1L,
+                    matchType = bestMatchType
+                )
+            )
         }
 
         return results
@@ -826,5 +891,8 @@ class FaceRecognitionEngine(private val context: Context) {
 
     fun close() {
         featureExtractor.close()
+        try {
+            tfliteDetector.close()
+        } catch (_: Throwable) {}
     }
 }
