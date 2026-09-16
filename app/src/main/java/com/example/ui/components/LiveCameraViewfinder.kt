@@ -157,7 +157,8 @@ fun LiveCameraViewfinder(
 
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 val now = System.currentTimeMillis()
-                if (selectedMode != CameraTestMode.CAPTURE && now - lastAnalysisTimestamp >= 33 && !isAnalyzing) {
+                // 40-45 FPS Target: ~22ms interval between frames
+                if (selectedMode != CameraTestMode.CAPTURE && now - lastAnalysisTimestamp >= 22 && !isAnalyzing) {
                     lastAnalysisTimestamp = now
                     isAnalyzing = true
                     try {

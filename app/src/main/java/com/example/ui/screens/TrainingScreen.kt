@@ -1500,9 +1500,71 @@ fun BiometricFaceSettingsCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // 3. Thermal & Battery Protection Switch
+            // 3. Dataset Class Balancing / Leveling Option
+            val classBalancing by viewModel.classBalancingEnabled.collectAsState()
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Balance,
+                                contentDescription = null,
+                                tint = if (classBalancing) Color(0xFF0284C7) else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Dataset Class Balancing (ডেটা সমতাকরণ)",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Text(
+                                    text = "স্বয়ংক্রিয়ভাবে ক্লাস ইমব্যালেন্স (যেমন ৩০০ বনাম ২০ ছবি) দূর করে সুষম রেশিও নিশ্চিত করে।",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = classBalancing,
+                            onCheckedChange = { viewModel.toggleClassBalancing(it) },
+                            enabled = !isTraining,
+                            modifier = Modifier.testTag("face_class_balancing_switch")
+                        )
+                    }
+                    if (classBalancing) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF0284C7).copy(alpha = 0.10f)
+                        ) {
+                            Text(
+                                text = "✓ Active: L2-Normalized Centroid Weighting & Variance Balancing সক্রিয় রয়েছে। কোনো ক্লাসে বেশি বা কম ছবি থাকলেও বায়াস বা পক্ষপাতিত্ব হবে না।",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                                color = Color(0xFF0284C7),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 4. Thermal & Battery Protection Switch
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                 shape = RoundedCornerShape(10.dp),

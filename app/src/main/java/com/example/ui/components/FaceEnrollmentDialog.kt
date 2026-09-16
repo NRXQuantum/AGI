@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import java.util.Locale
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.camera.core.*
@@ -151,6 +152,7 @@ fun FaceEnrollmentDialog(
     var liveMatchScore by remember { mutableFloatStateOf(0f) }
     var autoProgressFraction by remember { mutableFloatStateOf(0f) }
     var goodFrameCounter by remember { mutableIntStateOf(0) }
+    var lastStepChangeTime by remember { mutableLongStateOf(System.currentTimeMillis() + 800L) }
 
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
     var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
@@ -260,6 +262,7 @@ fun FaceEnrollmentDialog(
                     capturedAnglePhotos.add(scaled)
                     goodFrameCounter = 0
                     autoProgressFraction = 0f
+                    lastStepChangeTime = System.currentTimeMillis() + 1100L
 
                     if (currentStepIndex + 1 < ENROLLMENT_STEPS.size) {
                         currentStepIndex += 1
@@ -268,7 +271,7 @@ fun FaceEnrollmentDialog(
                     }
                 }
 
-                delay(350)
+                delay(400)
                 withContext(Dispatchers.Main) {
                     isFlashVisible = false
                     isCapturing = false
@@ -499,25 +502,36 @@ fun FaceEnrollmentDialog(
                                                 liveFeedbackEn = analysis.feedbackMessageEn
                                                 liveMatchScore = analysis.poseMatchScore
 
-                                                val isStrictFaceValid = analysis.hasFace &&
-                                                        analysis.boundingBox != null &&
-                                                        analysis.eyeDistance >= 14f &&
-                                                        analysis.poseMatchScore >= 0.80f
+                                                val now = System.currentTimeMillis()
+                                                val isTransitioning = now < lastStepChangeTime
 
-                                                if (isAutoCaptureEnabled && isStrictFaceValid && !isCapturing && !isFinished) {
-                                                    goodFrameCounter += 1
-                                                    autoProgressFraction = (goodFrameCounter / 7f).coerceIn(0f, 1f)
-
-                                                    if (goodFrameCounter >= 7) {
-                                                        processAndSaveCroppedFace(mirrored)
-                                                    }
+                                                if (isTransitioning) {
+                                                    goodFrameCounter = 0
+                                                    autoProgressFraction = 0f
+                                                    val remainingSec = ((lastStepChangeTime - now) / 1000f) + 0.1f
+                                                    liveFeedbackBn = "পরবর্তী কোণের জন্য প্রস্তুত হোন..."
+                                                    liveFeedbackEn = "Get ready for the next angle (${String.format(Locale.US, "%.1f", remainingSec)}s)"
                                                 } else {
-                                                    if (!analysis.hasFace) {
-                                                        goodFrameCounter = 0
-                                                        autoProgressFraction = 0f
-                                                    } else if (goodFrameCounter > 0) {
-                                                        goodFrameCounter = (goodFrameCounter - 1).coerceAtLeast(0)
-                                                        autoProgressFraction = (goodFrameCounter / 7f).coerceIn(0f, 1f)
+                                                    val isStrictFaceValid = analysis.hasFace &&
+                                                            analysis.boundingBox != null &&
+                                                            analysis.eyeDistance >= 14f &&
+                                                            analysis.poseMatchScore >= 0.80f
+
+                                                    if (isAutoCaptureEnabled && isStrictFaceValid && !isCapturing && !isFinished) {
+                                                        goodFrameCounter += 1
+                                                        autoProgressFraction = (goodFrameCounter / 18f).coerceIn(0f, 1f)
+
+                                                        if (goodFrameCounter >= 18) {
+                                                            processAndSaveCroppedFace(mirrored)
+                                                        }
+                                                    } else {
+                                                        if (!analysis.hasFace) {
+                                                            goodFrameCounter = 0
+                                                            autoProgressFraction = 0f
+                                                        } else if (goodFrameCounter > 0) {
+                                                            goodFrameCounter = (goodFrameCounter - 1).coerceAtLeast(0)
+                                                            autoProgressFraction = (goodFrameCounter / 18f).coerceIn(0f, 1f)
+                                                        }
                                                     }
                                                 }
                                             }

@@ -231,6 +231,14 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         repository.setFaceMatchThreshold(clamped)
     }
 
+    // Dataset Class Balancing & Leveling (rebalances weights when sample counts differ e.g. 300 vs 20)
+    private val _classBalancingEnabled = MutableStateFlow(true)
+    val classBalancingEnabled: StateFlow<Boolean> = _classBalancingEnabled.asStateFlow()
+
+    fun toggleClassBalancing(enabled: Boolean) {
+        _classBalancingEnabled.value = enabled
+    }
+
     init {
         val database = AppDatabase.getDatabase(application)
         repository = ProjectRepository(application, database.projectDao())
