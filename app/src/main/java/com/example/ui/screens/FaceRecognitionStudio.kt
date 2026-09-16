@@ -157,6 +157,7 @@ fun FaceRecognitionStudio(
                             centroidEmbedding = faceCentroid ?: bodyCentroid ?: patchCentroid,
                             bodyCentroidEmbedding = bodyCentroid,
                             patchCentroidEmbedding = patchCentroid,
+                            sampleEmbeddings = faceEmbeddings,
                             totalFacePhotos = faceEmbeddings.size,
                             totalBodyPhotos = bodyEmbeddings.size
                         )

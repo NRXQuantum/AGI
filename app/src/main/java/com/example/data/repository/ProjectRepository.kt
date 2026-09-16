@@ -1137,15 +1137,77 @@ class ProjectRepository(
         if (width < 32 || height < 32) return Pair(fullImageResult, emptyList())
 
         try {
+            val isPersonProject = trainer.classLabels.any {
+                it.contains("person", ignoreCase = true) ||
+                it.contains("face", ignoreCase = true) ||
+                it.contains("human", ignoreCase = true) ||
+                it.contains("man", ignoreCase = true) ||
+                it.contains("woman", ignoreCase = true)
+            }
+
+            // Check for faces first (Selfies, Close-ups, Portraits)
+            val faceEngine = FaceRecognitionEngine(context)
+            val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = if (isMultiObject) 4 else 1)
+            faceEngine.close()
+
             val tfliteDetector = getTFLiteDetector()
             val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.20f)
 
+            val candidateRegions = mutableListOf<DetectedObjectRegion>()
+
+            // 1. If faces detected (close-up / portrait / selfie), prioritize face regions with 100% biometric authority
+            for (faceBox in detectedFaces) {
+                var predLabel = "Face"
+                var predConf = faceBox.confidence
+                var predIdx = 0
+
+                if (trainer.isTrained && trainer.classLabels.isNotEmpty()) {
+                    try {
+                        val cropL = (faceBox.leftNorm * bitmap.width).toInt().coerceIn(0, maxOf(0, bitmap.width - 24))
+                        val cropT = (faceBox.topNorm * bitmap.height).toInt().coerceIn(0, maxOf(0, bitmap.height - 24))
+                        val maxW = bitmap.width - cropL
+                        val maxH = bitmap.height - cropT
+                        if (maxW >= 16 && maxH >= 16) {
+                            val desiredW = ((faceBox.rightNorm - faceBox.leftNorm) * bitmap.width).toInt()
+                            val desiredH = ((faceBox.bottomNorm - faceBox.topNorm) * bitmap.height).toInt()
+                            val cropW = desiredW.coerceIn(16, maxW)
+                            val cropH = desiredH.coerceIn(16, maxH)
+
+                            val cropBmp = Bitmap.createBitmap(bitmap, cropL, cropT, cropW, cropH)
+                            try {
+                                val cropFeat = featureExtractor.extractFeatures(cropBmp)
+                                val cropPred = trainer.predict(cropFeat)
+                                if (cropPred.confidence >= 0.20f) {
+                                    predLabel = cropPred.classLabel
+                                    predConf = cropPred.confidence
+                                    predIdx = cropPred.classIndex
+                                }
+                            } finally {
+                                cropBmp.recycle()
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+
+                candidateRegions.add(
+                    DetectedObjectRegion(
+                        classIndex = predIdx,
+                        classLabel = predLabel,
+                        confidence = predConf,
+                        boxLeftNorm = faceBox.leftNorm,
+                        boxTopNorm = faceBox.topNorm,
+                        boxRightNorm = faceBox.rightNorm,
+                        boxBottomNorm = faceBox.bottomNorm,
+                        regionTitle = predLabel
+                    )
+                )
+            }
+
+            // 2. Add object detections if not overlapping with faces
             if (detections.isNotEmpty()) {
                 val selectedDetections = if (isMultiObject) {
-                    // Capped to top 4 prominent objects for smooth 30+ FPS rendering
                     detections.take(4)
                 } else {
-                    // Single Object Mode: maintain spatial continuity with previous box, or pick closest to center
                     val prevBox = lastTrackedSingleBox
                     if (prevBox != null) {
                         val prevCx = (prevBox[0] + prevBox[2]) / 2f
@@ -1166,16 +1228,6 @@ class ProjectRepository(
                     }
                 }
 
-                val regions = mutableListOf<DetectedObjectRegion>()
-                // Check if project classes are person names / people labels
-                val isPersonProject = trainer.classLabels.any {
-                    it.contains("person", ignoreCase = true) ||
-                    it.contains("face", ignoreCase = true) ||
-                    it.contains("human", ignoreCase = true) ||
-                    it.contains("man", ignoreCase = true) ||
-                    it.contains("woman", ignoreCase = true)
-                }
-
                 for (det in selectedDetections) {
                     val boxL = det.leftNorm
                     val boxT = det.topNorm
@@ -1189,8 +1241,6 @@ class ProjectRepository(
                     val isDetPerson = (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true))
 
                     // If user trained custom classes in this project:
-                    // If project is about people, ONLY classify regions that are actually Persons!
-                    // Inanimate objects (chair, table, cup, bottle) keep their real object identity.
                     if (trainer.isTrained && trainer.classLabels.isNotEmpty()) {
                         val shouldClassify = if (isPersonProject) isDetPerson else true
                         if (shouldClassify) {
@@ -1222,38 +1272,49 @@ class ProjectRepository(
                         }
                     }
 
-                    regions.add(
-                        DetectedObjectRegion(
-                            classIndex = predIdx,
-                            classLabel = predLabel,
-                            confidence = predConf,
-                            boxLeftNorm = boxL,
-                            boxTopNorm = boxT,
-                            boxRightNorm = boxR,
-                            boxBottomNorm = boxB,
-                            regionTitle = predLabel
-                        )
-                    )
-                }
-
-                if (regions.isNotEmpty()) {
-                    if (!isMultiObject) {
-                        val primary = regions.first()
-                        lastTrackedSingleBox = floatArrayOf(
-                            primary.boxLeftNorm,
-                            primary.boxTopNorm,
-                            primary.boxRightNorm,
-                            primary.boxBottomNorm
-                        )
-                        val singleResult = fullImageResult.copy(
-                            classIndex = primary.classIndex,
-                            classLabel = primary.classLabel,
-                            confidence = primary.confidence
-                        )
-                        return Pair(singleResult, listOf(primary))
-                    } else {
-                        return Pair(fullImageResult, regions)
+                    // If we already have a face box covering this person, avoid duplicate bloated box
+                    val overlapsWithFace = candidateRegions.any { f ->
+                        val midX = (f.boxLeftNorm + f.boxRightNorm) * 0.5f
+                        val midY = (f.boxTopNorm + f.boxBottomNorm) * 0.5f
+                        midX in boxL..boxR && midY in boxT..boxB
                     }
+
+                    if (!overlapsWithFace || !isDetPerson) {
+                        candidateRegions.add(
+                            DetectedObjectRegion(
+                                classIndex = predIdx,
+                                classLabel = predLabel,
+                                confidence = predConf,
+                                boxLeftNorm = boxL,
+                                boxTopNorm = boxT,
+                                boxRightNorm = boxR,
+                                boxBottomNorm = boxB,
+                                regionTitle = predLabel
+                            )
+                        )
+                    }
+                }
+            }
+
+            val regions = candidateRegions.take(if (isMultiObject) 4 else 1)
+
+            if (regions.isNotEmpty()) {
+                if (!isMultiObject) {
+                    val primary = regions.first()
+                    lastTrackedSingleBox = floatArrayOf(
+                        primary.boxLeftNorm,
+                        primary.boxTopNorm,
+                        primary.boxRightNorm,
+                        primary.boxBottomNorm
+                    )
+                    val singleResult = fullImageResult.copy(
+                        classIndex = primary.classIndex,
+                        classLabel = primary.classLabel,
+                        confidence = primary.confidence
+                    )
+                    return Pair(singleResult, listOf(primary))
+                } else {
+                    return Pair(fullImageResult, regions)
                 }
             }
 
