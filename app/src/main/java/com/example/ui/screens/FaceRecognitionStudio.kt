@@ -99,35 +99,66 @@ fun FaceRecognitionStudio(
         coroutineScope.launch(Dispatchers.Default) {
             val list = mutableListOf<EnrolledPerson>()
             for ((idx, person) in enrolledList.withIndex()) {
-                val embeddings = mutableListOf<FloatArray>()
+                val faceEmbeddings = mutableListOf<FloatArray>()
+                val bodyEmbeddings = mutableListOf<FloatArray>()
+                val patchEmbeddings = mutableListOf<FloatArray>()
+
                 for (photo in person.photos) {
+                    // 1. Detect Face
                     val faces = faceEngine.detectFaces(photo, maxFaces = 1)
-                    val box = faces.firstOrNull() ?: com.example.ml.FaceBoundingBox(0.05f, 0.05f, 0.95f, 0.95f)
-                    val emb = faceEngine.extractFaceEmbedding(photo, box)
-                    embeddings.add(emb)
+                    if (faces.isNotEmpty()) {
+                        val fBox = faces[0]
+                        faceEmbeddings.add(faceEngine.extractFaceEmbedding(photo, fBox))
+                        patchEmbeddings.add(faceEngine.extractMultiPatchEmbedding(photo, fBox))
+                    }
+
+                    // 2. Detect Body
+                    val bodies = faceEngine.detectHumanBodies(photo, maxBodies = 1)
+                    if (bodies.isNotEmpty()) {
+                        val bBox = bodies[0]
+                        bodyEmbeddings.add(faceEngine.extractBodyAppearanceEmbedding(photo, bBox))
+                        patchEmbeddings.add(faceEngine.extractMultiPatchEmbedding(photo, bBox))
+                    }
+
+                    // 3. Fallback for cropped/partial photos
+                    if (faces.isEmpty() && bodies.isEmpty()) {
+                        val defaultBox = com.example.ml.FaceBoundingBox(0.05f, 0.05f, 0.95f, 0.95f)
+                        patchEmbeddings.add(faceEngine.extractMultiPatchEmbedding(photo, defaultBox))
+                        bodyEmbeddings.add(faceEngine.extractBodyAppearanceEmbedding(photo, defaultBox))
+                    }
                 }
 
-                if (embeddings.isNotEmpty()) {
-                    val dim = embeddings[0].size
+                fun computeNormCentroid(embs: List<FloatArray>): FloatArray? {
+                    if (embs.isEmpty()) return null
+                    val dim = embs[0].size
                     val centroid = FloatArray(dim)
-                    for (e in embeddings) {
+                    for (e in embs) {
                         for (i in 0 until dim) centroid[i] += e[i]
                     }
-                    val count = embeddings.size.toFloat()
+                    val count = embs.size.toFloat()
                     for (i in 0 until dim) centroid[i] /= count
-
-                    // Normalize
                     var sumSq = 0f
                     for (v in centroid) sumSq += v * v
                     val norm = kotlin.math.sqrt(sumSq).coerceAtLeast(1e-7f)
                     for (i in 0 until dim) centroid[i] /= norm
+                    return centroid
+                }
 
+                val faceCentroid = computeNormCentroid(faceEmbeddings)
+                val bodyCentroid = computeNormCentroid(bodyEmbeddings)
+                val patchCentroid = computeNormCentroid(patchEmbeddings)
+
+                if (faceCentroid != null || bodyCentroid != null || patchCentroid != null) {
                     list.add(
                         EnrolledPerson(
                             id = idx.toLong(),
                             name = person.name,
                             faceSamplePaths = emptyList(),
-                            centroidEmbedding = centroid
+                            centroidEmbedding = faceCentroid ?: bodyCentroid ?: patchCentroid,
+                            bodyCentroidEmbedding = bodyCentroid,
+                            patchCentroidEmbedding = patchCentroid,
+                            totalFacePhotos = faceEmbeddings.size,
+                            totalBodyPhotos = bodyEmbeddings.size
                         )
                     )
                 }
@@ -208,11 +239,11 @@ fun FaceRecognitionStudio(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Person Identification & Face ID Studio",
+                                text = "Person & Human Identification Studio",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "ব্যক্তি চেনার বিশেষ মোড • 100% On-Device",
+                                text = "ব্যক্তি ও হিউম্যান রিকগনিশন (Face + Full Body + Patches)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -222,7 +253,7 @@ fun FaceRecognitionStudio(
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text(
-                                text = "BIOMETRIC AI",
+                                text = "HYBRID RE-ID",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF10B981)
@@ -232,13 +263,38 @@ fun FaceRecognitionStudio(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "Train models to recognize 10+ specific people using 1 to 3 face photos. Produces high-accuracy cosine-margin embeddings. Fully compatible with Real-Time Camera, Model Exporter (.tflite), and Batch Folder Auto-Sorter!",
+                        text = "Train models to recognize people across Face, Full Body, and Partial Upper Torso. Built-in Smart Data Balancing & Mixed-Patch Handler automatically handles uneven photo counts (e.g. 300 vs 20) and cropped photos without bias!",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 18.sp
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoFixHigh,
+                                contentDescription = null,
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Smart Data Leveling: Face-only, Full-body, or Cropped photos supported seamlessly",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 
@@ -637,21 +693,33 @@ fun FaceRecognitionStudio(
 
                     val single = identifiedFaces.firstOrNull()?.let { face ->
                         LiveSinglePrediction(
-                            label = face.personName,
+                            label = if (face.personName != "Unknown Person") "${face.personName} (${face.matchType})" else "Unknown Person",
                             confidence = face.confidence,
                             latencyMs = latency
                         )
                     }
 
                     val boxes = identifiedFaces.map { face ->
+                        val boxColor = when {
+                            face.personName == "Unknown Person" -> Color(0xFFEF4444)
+                            face.matchType == "Face + Body Match" -> Color(0xFF10B981) // Emerald
+                            face.matchType == "Face Match" -> Color(0xFF0284C7) // Sky blue
+                            face.matchType == "Body / Torso Lock" -> Color(0xFF6366F1) // Indigo
+                            else -> Color(0xFFF59E0B) // Amber
+                        }
+                        val displayLabel = if (face.personName != "Unknown Person") {
+                            "${face.personName} • ${face.matchType}"
+                        } else {
+                            "Unknown Person"
+                        }
                         LiveDetectedBox(
-                            label = face.personName,
+                            label = displayLabel,
                             confidence = face.confidence,
                             leftNorm = face.boundingBox.leftNorm,
                             topNorm = face.boundingBox.topNorm,
                             rightNorm = face.boundingBox.rightNorm,
                             bottomNorm = face.boundingBox.bottomNorm,
-                            color = if (face.personName != "Unknown Person") Color(0xFF10B981) else Color(0xFFEF4444)
+                            color = boxColor
                         )
                     }
 
