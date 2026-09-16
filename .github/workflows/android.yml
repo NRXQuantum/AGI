@@ -1,0 +1,227 @@
+name: Universal Android Build & Auto Release
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # ---------------------------------------------------------------
+      # 1. Detect required Gradle version from project files
+      # ---------------------------------------------------------------
+      - name: Detect Gradle version required by AGP
+        id: gradle-ver
+        run: |
+          WRAPPER_PROPS="gradle/wrapper/gradle-wrapper.properties"
+          GRADLE_VER=""
+
+          if [ -f "$WRAPPER_PROPS" ]; then
+            GRADLE_VER=$(grep -oP 'gradle-\K[0-9]+\.[0-9]+(\.[0-9]+)?(?=-bin)' "$WRAPPER_PROPS" | head -n1)
+          fi
+
+          if [ -z "$GRADLE_VER" ]; then
+            AGP_VER=$(grep -rhoP "com\.android\.tools\.build:gradle:\K[0-9]+\.[0-9]+(\.[0-9]+)?" \
+              build.gradle build.gradle.kts settings.gradle settings.gradle.kts \
+              app/build.gradle app/build.gradle.kts 2>/dev/null | head -n1)
+
+            if [ -n "$AGP_VER" ]; then
+              AGP_MAJOR=$(echo "$AGP_VER" | cut -d. -f1)
+              case "$AGP_MAJOR" in
+                9) GRADLE_VER="9.7.1" ;;
+                8) GRADLE_VER="8.11.1" ;;
+                7) GRADLE_VER="7.6.4" ;;
+                *) GRADLE_VER="9.7.1" ;;
+              esac
+            fi
+          fi
+
+          if [ -z "$GRADLE_VER" ]; then
+            GRADLE_VER="9.7.1"
+          fi
+
+          echo "Using Gradle version: $GRADLE_VER"
+          echo "version=$GRADLE_VER" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      # 2. Setup Android SDK (platform-tools only)
+      # ---------------------------------------------------------------
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+
+      # ---------------------------------------------------------------
+      # 3. Setup required Gradle version
+      # ---------------------------------------------------------------
+      - name: Setup Gradle ${{ steps.gradle-ver.outputs.version }}
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ steps.gradle-ver.outputs.version }}
+
+      # ---------------------------------------------------------------
+      # 4. Ensure Gradle wrapper exists and matches required version
+      # ---------------------------------------------------------------
+      - name: Ensure Gradle wrapper
+        run: |
+          GRADLE_VER="${{ steps.gradle-ver.outputs.version }}"
+
+          if [ -f "./gradlew" ] && [ -f "./gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "Wrapper found. Updating distributionUrl to gradle-${GRADLE_VER}-bin.zip"
+            sed -i "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip|" \
+              gradle/wrapper/gradle-wrapper.properties
+          else
+            echo "No wrapper found. Generating with Gradle ${GRADLE_VER}"
+            gradle wrapper --gradle-version "$GRADLE_VER" --distribution-type bin
+          fi
+          chmod +x ./gradlew
+          ./gradlew --version
+
+      # ---------------------------------------------------------------
+      # 5. Generate debug.keystore in project root
+      # ---------------------------------------------------------------
+      - name: Generate debug.keystore
+        if: ${{ github.event.inputs.build_type != 'release' }}
+        run: |
+          KEYSTORE_PATH="$GITHUB_WORKSPACE/debug.keystore"
+
+          if [ -f "$KEYSTORE_PATH" ]; then
+            echo "debug.keystore already exists, skipping."
+            exit 0
+          fi
+
+          mkdir -p "$HOME/.android"
+          chmod u+w "$HOME/.android" 2>/dev/null || true
+
+          keytool -genkey -v \
+            -keystore "$KEYSTORE_PATH" \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 \
+            -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          echo "Created debug.keystore at $KEYSTORE_PATH"
+
+      # ---------------------------------------------------------------
+      # 6. Optional: decode release keystore from secrets
+      # ---------------------------------------------------------------
+      - name: Decode release keystore
+        if: ${{ github.event.inputs.build_type == 'release' }}
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "RELEASE_KEYSTORE_BASE64 secret not set. Skipping."
+            exit 0
+          fi
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.keystore"
+          echo "Release keystore decoded."
+
+      # ---------------------------------------------------------------
+      # 7. Determine build variant
+      # ---------------------------------------------------------------
+      - name: Determine build variant
+        id: variant
+        run: |
+          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+            echo "task=assembleRelease" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=assembleDebug" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---------------------------------------------------------------
+      # 8. Build APK
+      # ---------------------------------------------------------------
+      - name: Build APK
+        run: |
+          TASK="${{ steps.variant.outputs.task }}"
+
+          if ./gradlew tasks --all 2>/dev/null | grep -q "^${TASK}"; then
+            ./gradlew "$TASK" --stacktrace --no-daemon
+          else
+            ./gradlew ":app:${TASK}" --stacktrace --no-daemon
+          fi
+
+      # ---------------------------------------------------------------
+      # 9. Prepare APK for release
+      # ---------------------------------------------------------------
+      - name: Prepare APK
+        id: apk
+        run: |
+          APK_PATH=$(find . -path "*/build/outputs/apk/*/*.apk" | head -n1)
+
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK found!"
+            find . -path "*/build/outputs/*" -type f 2>/dev/null || true
+            exit 1
+          fi
+
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'debug' }}"
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          NEW_NAME="app-${BUILD_TYPE}-${TIMESTAMP}-run${{ github.run_number }}.apk"
+
+          cp "$APK_PATH" "$NEW_NAME"
+          echo "apk_path=$NEW_NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=build-${{ github.run_number }}-${TIMESTAMP}" >> "$GITHUB_OUTPUT"
+          echo "Built: $NEW_NAME"
+
+      # ---------------------------------------------------------------
+      # 10. Upload artifact
+      # ---------------------------------------------------------------
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ github.run_number }}
+          if-no-files-found: error
+          path: ${{ steps.apk.outputs.apk_path }}
+
+      # ---------------------------------------------------------------
+      # 11. Create GitHub Release
+      # ---------------------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.apk.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: "Build ${{ github.run_number }} - ${{ github.sha }}"
+          body: |
+            Auto-generated APK from commit ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+            Build type: ${{ github.event.inputs.build_type || 'debug' }}
+            Triggered by: ${{ github.actor }}
+          files: ${{ steps.apk.outputs.apk_path }}
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
