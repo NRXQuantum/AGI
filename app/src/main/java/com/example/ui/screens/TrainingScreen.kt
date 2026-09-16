@@ -194,7 +194,7 @@ fun TrainingScreen(
                     Column(verticalArrangement = Arrangement.Center) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = if (isFaceMode) "Biometric Face ID Trainer" else "On-Device Trainer",
+                                text = if (isFaceMode) "Person & Human Identification Trainer" else "On-Device Trainer",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             if (isTraining) {
@@ -223,7 +223,7 @@ fun TrainingScreen(
                             }
                         }
                         Text(
-                            text = project?.name ?: (if (isFaceMode) "Face Recognition Biometric Space" else "Model Personalization"),
+                            text = project?.name ?: (if (isFaceMode) "Multi-Modal Hybrid Re-ID (Face + Full Body + Patches)" else "Model Personalization"),
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -445,7 +445,7 @@ fun TrainingScreen(
                             Column {
                                 Text(
                                     text = if (canTrain) {
-                                        if (isFaceMode) "Ready to Calibrate Face ID" else "Ready to Train On-Device"
+                                        if (isFaceMode) "Ready to Calibrate Human Biometrics" else "Ready to Train On-Device"
                                     } else {
                                         if (isFaceMode) "Biometric Dataset Incomplete" else "Dataset Incomplete"
                                     },
@@ -454,10 +454,10 @@ fun TrainingScreen(
                                 )
                                 Text(
                                     text = if (canTrain) {
-                                        if (isFaceMode) "$numClasses individuals enrolled. Facial landmark & centroid alignment ready."
+                                        if (isFaceMode) "$numClasses individuals enrolled. Face, body & patch alignment ready."
                                         else "$numClasses categories loaded. Feature scaling & SGD ready."
                                     } else {
-                                        if (isFaceMode) "At least 2 individuals required (e.g. Person A, Person B). Please enroll faces in Dataset tab."
+                                        if (isFaceMode) "At least 2 individuals required (e.g. Person A, Person B). Please enroll photos in Dataset tab."
                                         else "At least 2 categories required. Please add images in Dataset tab."
                                     },
                                     style = MaterialTheme.typography.bodySmall,
@@ -495,12 +495,12 @@ fun TrainingScreen(
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Column {
                                                 Text(
-                                                    text = if (isFaceMode) "Face ID Biometric Model Active" else "Model Trained & Ready",
+                                                    text = if (isFaceMode) "Person & Human Biometric Model Active" else "Model Trained & Ready",
                                                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                                     color = Color(0xFF065F46)
                                                 )
                                                 Text(
-                                                    text = if (isFaceMode) "Ready for live multi-face camera recognition & face sorting" else "Ready for live camera testing & format export",
+                                                    text = if (isFaceMode) "Ready for live multi-modal camera identification & auto-sorting" else "Ready for live camera testing & format export",
                                                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                                                     color = Color(0xFF047857)
                                                 )
@@ -540,7 +540,7 @@ fun TrainingScreen(
                                         ) {
                                             Icon(if (isFaceMode) Icons.Default.Face else Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text(if (isFaceMode) "Test Face ID" else "Test Model", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                            Text(if (isFaceMode) "Test Human ID" else "Test Model", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                                         }
 
                                         Button(
@@ -557,7 +557,7 @@ fun TrainingScreen(
                                         ) {
                                             Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text(if (isFaceMode) "Export Face Model" else "Export Formats", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                            Text(if (isFaceMode) "Export Person Model" else "Export Formats", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                                         }
                                     }
                                 }
@@ -603,9 +603,9 @@ fun TrainingScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (latestModel != null) {
-                                    if (isFaceMode) "Re-Calibrate Face ID" else "Re-Train Model On-Device"
+                                    if (isFaceMode) "Re-Calibrate Person Biometrics" else "Re-Train Model On-Device"
                                 } else {
-                                    if (isFaceMode) "Calibrate Face ID Embeddings" else "Start On-Device Training"
+                                    if (isFaceMode) "Calibrate Person & Face Embeddings" else "Start On-Device Training"
                                 },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
@@ -1247,45 +1247,49 @@ fun BiometricFaceSettingsCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(38.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFF0284C7).copy(alpha = 0.15f)),
+                            .background(Color(0xFF10B981).copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.Face,
+                            Icons.Default.AccessibilityNew,
                             contentDescription = null,
-                            tint = Color(0xFF0284C7),
-                            modifier = Modifier.size(22.dp)
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "Face Biometric Settings",
+                            text = "Person & Human Re-ID Settings",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Metric Embedding & Centroid Space",
+                            text = "Multi-Modal Hybrid: Face + Full Body + Patches",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
+                Spacer(modifier = Modifier.width(8.dp))
                 Surface(
-                    color = Color(0xFF0284C7).copy(alpha = 0.15f),
+                    color = Color(0xFF10B981).copy(alpha = 0.15f),
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        text = "BIOMETRIC",
+                        text = "HYBRID RE-ID",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 1.sp
+                            letterSpacing = 0.8.sp
                         ),
-                        color = Color(0xFF0284C7),
+                        color = Color(0xFF10B981),
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                     )
                 }
@@ -1293,9 +1297,9 @@ fun BiometricFaceSettingsCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Explanation Card explaining why neural network hyperparameters are removed
+            // Explanation Card explaining Hybrid Multi-Modal Architecture
             Surface(
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
                 shape = RoundedCornerShape(10.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f))
             ) {
@@ -1306,7 +1310,7 @@ fun BiometricFaceSettingsCard(
                     verticalAlignment = Alignment.Top
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Info,
+                        imageVector = Icons.Default.AutoAwesome,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
@@ -1316,15 +1320,16 @@ fun BiometricFaceSettingsCard(
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         Text(
-                            text = "Automated Biometric Centroid Calibration",
+                            text = "Smart Multi-Modal Identification Engine",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Face recognition operates via facial landmark detection and 512D unit-sphere centroid projection. Traditional iterative backpropagation (epochs, mini-batch AdamW, learning rate decay) does not apply to biometric metric calibration.",
+                            text = "সিস্টেমটি মুখ (512D Face Biometrics), শরীর ও পোশাক (256D Body Torso), এবং আংশিক কাঁধ/বুক (128D Patches) একত্রে বিশ্লেষণ করে। ব্যক্তি সোজা তাকালে ফেস দিয়ে, আর পেছন ফিরলে বা দূরে গেলে বডি ও পোশাক দিয়ে ট্র্যাক হারাবে না।",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 16.sp
                         )
                     }
                 }
@@ -1338,17 +1343,18 @@ fun BiometricFaceSettingsCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Biometric Match Sensitivity",
+                        text = "Match Sensitivity (শনাক্তকরণ সংবেদনশীলতা)",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                     )
                     Text(
-                        text = "Minimum confidence required to recognize person",
+                        text = "Minimum similarity required to recognize person",
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                Spacer(modifier = Modifier.width(8.dp))
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer,
                     shape = RoundedCornerShape(6.dp)
@@ -1365,7 +1371,8 @@ fun BiometricFaceSettingsCard(
                             fontFamily = FontFamily.Monospace
                         ),
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        maxLines = 1
                     )
                 }
             }
@@ -1432,7 +1439,7 @@ fun BiometricFaceSettingsCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 2. Active Biometric Pipeline Details
+            // 2. Active Multi-Modal Pipeline Details
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                 shape = RoundedCornerShape(10.dp),
@@ -1440,12 +1447,12 @@ fun BiometricFaceSettingsCard(
             ) {
                 Column(modifier = Modifier.padding(10.dp)) {
                     Text(
-                        text = "ACTIVE BIOMETRIC PIPELINE",
+                        text = "ACTIVE MULTI-MODAL RE-ID PIPELINE",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.8.sp
                         ),
-                        color = Color(0xFF0284C7)
+                        color = Color(0xFF10B981)
                     )
                     Spacer(modifier = Modifier.height(6.dp))
 
@@ -1458,7 +1465,7 @@ fun BiometricFaceSettingsCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Metric: Cosine Similarity on 512D Unit-Sphere L2 Norm",
+                            text = "Face Biometrics: 512D Unit-Sphere L2 Normalized Embedding",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -1475,7 +1482,7 @@ fun BiometricFaceSettingsCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Multi-Shot Fusion: Centroid vector averaging across 1-3 photos per person",
+                            text = "Body & Silhouette: 256D Torso, Height-Ratio & Apparel Appearance",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -1492,7 +1499,7 @@ fun BiometricFaceSettingsCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Face Locator: Android Hardware FaceDetector with Spatial Luminance fallback",
+                            text = "Partial Multi-Patch: 128D Upper-Torso & Cropped Frame Invariant Lock",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = MaterialTheme.colorScheme.onSurface
                         )

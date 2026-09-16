@@ -251,11 +251,11 @@ fun InferenceScreen(
                 title = {
                     Column(verticalArrangement = Arrangement.Center) {
                         Text(
-                            text = if (isFaceMode) "Face Recognition & Biometrics" else "Model Testing & Detection",
+                            text = if (isFaceMode) "Person & Human Identification" else "Model Testing & Detection",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = project?.name ?: (if (isFaceMode) "On-Device Face ID" else "On-Device Inference"),
+                            text = project?.name ?: (if (isFaceMode) "Multi-Modal Human Re-ID" else "On-Device Inference"),
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -307,7 +307,7 @@ fun InferenceScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isFaceMode) "Biometric Face ID Source" else "Inference Source",
+                                text = if (isFaceMode) "Person Identification Source" else "Inference Source",
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                             )
                         }
@@ -315,12 +315,12 @@ fun InferenceScreen(
                         val activeEngineTitle = when (engineMode) {
                             InferenceEngineMode.ACTIVE_TRAINED_MODEL -> {
                                 if (latestModel != null || (isFaceMode && project?.isTrained == true)) {
-                                    if (isFaceMode) "Face DB (${classes.size} Enrolled)" else "Active (${String.format(Locale.US, "%.0f%%", latestModel!!.accuracy * 100)})"
+                                    if (isFaceMode) "Human DB (${classes.size} Persons)" else "Active (${String.format(Locale.US, "%.0f%%", latestModel!!.accuracy * 100)})"
                                 } else {
                                     if (isFaceMode) "Not Calibrated" else "Not Trained"
                                 }
                             }
-                            InferenceEngineMode.EXPORTED_TFLITE -> if (loadedExportedModel != null) (if (isFaceMode) "Face .tflite Ready" else ".tflite Ready") else "No .tflite"
+                            InferenceEngineMode.EXPORTED_TFLITE -> if (loadedExportedModel != null) (if (isFaceMode) "Person .tflite Ready" else ".tflite Ready") else "No .tflite"
                             InferenceEngineMode.CUSTOM_IMPORTED_FILE -> if (loadedExportedModel != null) (if (isFaceMode) "Custom Biometrics" else "Custom Model") else "No File"
                         }
                         Surface(

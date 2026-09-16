@@ -200,21 +200,21 @@ fun ClassManagementScreen(
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = project?.name ?: (if (isFaceRecognition) "Face ID Enrollment" else "Dataset Collection"),
+                                text = project?.name ?: (if (isFaceRecognition) "Person & Human ID Enrollment" else "Dataset Collection"),
                                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                             )
                             if (isFaceRecognition) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Surface(
-                                    color = Color(0xFF0284C7).copy(alpha = 0.15f),
+                                    color = Color(0xFF10B981).copy(alpha = 0.15f),
                                     shape = RoundedCornerShape(6.dp)
                                 ) {
                                     Text(
-                                        text = "FACE ID",
+                                        text = "HYBRID RE-ID",
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF0284C7)
+                                            color = Color(0xFF10B981)
                                         ),
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
@@ -223,7 +223,7 @@ fun ClassManagementScreen(
                         }
                         Text(
                             text = if (isFaceRecognition)
-                                "Enroll individuals, add reference face photos, or import ZIP"
+                                "Enroll individuals with face, full body, or mixed photos (Auto-Balanced)"
                             else
                                 "Add categories, rename classes, or import ZIP dataset",
                             style = MaterialTheme.typography.bodySmall,
@@ -254,7 +254,7 @@ fun ClassManagementScreen(
                                 .padding(end = 8.dp)
                                 .testTag("go_to_train_btn")
                         ) {
-                            Text(if (isFaceRecognition) "Train Face ID" else "Train Model")
+                            Text(if (isFaceRecognition) "Train Human ID" else "Train Model")
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
