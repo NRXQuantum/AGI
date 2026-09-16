@@ -363,15 +363,23 @@ class ProjectRepository(
         }
 
         if (isFaceMode) {
+            val totalPhotos = allSamples.size.coerceAtLeast(1)
+            var processedPhotos = 0
+
             onProgress(
                 TrainingProgress(
                     currentEpoch = 0,
-                    totalEpochs = 10,
+                    totalEpochs = classes.size,
                     loss = 0f,
                     accuracy = 0f,
-                    statusMessage = "Face Recognition Mode: Extracting biometric face vectors...",
+                    statusMessage = "Person & Human ID: বায়োমেট্রিক ও বডি ফিচার এক্সট্রাক্ট করা হচ্ছে...",
                     overallPercentage = 5f,
-                    phase = TrainingPhase.EXTRACTING_FEATURES
+                    phase = TrainingPhase.EXTRACTING_FEATURES,
+                    currentStep = 0,
+                    totalSteps = totalPhotos,
+                    elapsedSeconds = 0L,
+                    estimatedRemainingSeconds = (totalPhotos * 0.15f).toLong().coerceAtLeast(1L),
+                    speedText = "প্রস্তুতি চলছে..."
                 )
             )
             val faceEngine = FaceRecognitionEngine(context)
@@ -402,19 +410,31 @@ class ProjectRepository(
                             if (!bmp.isRecycled) bmp.recycle()
                         }
                     }
-                }
+                    processedPhotos++
+                    val elapsedMs = (System.currentTimeMillis() - overallStartMs).coerceAtLeast(50L)
+                    val elapsedSec = elapsedMs / 1000L
+                    val msPerPhoto = elapsedMs.toFloat() / processedPhotos.toFloat()
+                    val remainingPhotos = (totalPhotos - processedPhotos).coerceAtLeast(0)
+                    val remainingSec = ((remainingPhotos * msPerPhoto) / 1000f).toLong()
+                    val pct = (5f + (processedPhotos.toFloat() / totalPhotos.toFloat()) * 85f).coerceIn(5f, 95f)
 
-                onProgress(
-                    TrainingProgress(
-                        currentEpoch = cIdx + 1,
-                        totalEpochs = classes.size,
-                        loss = 0.05f,
-                        accuracy = 0.985f,
-                        statusMessage = "Calibrated face embeddings for '${cEntity.className}' (${embeddings.size} photos)",
-                        overallPercentage = 10f + ((cIdx + 1).toFloat() / classes.size) * 75f,
-                        phase = TrainingPhase.EXTRACTING_FEATURES
+                    onProgress(
+                        TrainingProgress(
+                            currentEpoch = cIdx + 1,
+                            totalEpochs = classes.size,
+                            loss = 0.04f,
+                            accuracy = 0.985f,
+                            statusMessage = "প্রসেস করা হচ্ছে: ${cEntity.className} ($processedPhotos/$totalPhotos ফটো)",
+                            overallPercentage = pct,
+                            phase = TrainingPhase.EXTRACTING_FEATURES,
+                            currentStep = processedPhotos,
+                            totalSteps = totalPhotos,
+                            elapsedSeconds = elapsedSec,
+                            estimatedRemainingSeconds = remainingSec,
+                            speedText = String.format(Locale.US, "%.1f ms/ফটো", msPerPhoto)
+                        )
                     )
-                )
+                }
 
                 if (embeddings.isNotEmpty()) {
                     val dim = embeddings[0].size

@@ -154,6 +154,40 @@ fun FaceEnrollmentDialog(
     var goodFrameCounter by remember { mutableIntStateOf(0) }
     var lastStepChangeTime by remember { mutableLongStateOf(System.currentTimeMillis() + 800L) }
 
+    // Live Timing & Progress Calculations
+    val scanStartTime = remember { System.currentTimeMillis() }
+    var elapsedSeconds by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(isFinished) {
+        while (!isFinished) {
+            kotlinx.coroutines.delay(500)
+            elapsedSeconds = (System.currentTimeMillis() - scanStartTime) / 1000L
+        }
+    }
+
+    // Dynamic total progress computation (0% to 100%)
+    val totalProgressPct by remember(currentStepIndex, autoProgressFraction, isFinished) {
+        derivedStateOf {
+            if (isFinished) 100f
+            else {
+                val stepContribution = currentStepIndex.toFloat() / ENROLLMENT_STEPS.size.toFloat()
+                val currentStepFraction = (autoProgressFraction.coerceIn(0f, 1f) / ENROLLMENT_STEPS.size.toFloat())
+                ((stepContribution + currentStepFraction) * 100f).coerceIn(0f, 99f)
+            }
+        }
+    }
+
+    // Dynamic Estimated Time Remaining (seconds)
+    val estimatedRemainingSeconds by remember(currentStepIndex, autoProgressFraction, isFinished) {
+        derivedStateOf {
+            if (isFinished) 0L
+            else {
+                val remainingFraction = (ENROLLMENT_STEPS.size - currentStepIndex - autoProgressFraction).coerceAtLeast(0.1f)
+                (remainingFraction * 2.2f).toLong().coerceAtLeast(1L)
+            }
+        }
+    }
+
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
     var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
 
@@ -833,24 +867,90 @@ fun FaceEnrollmentDialog(
                                 }
                             }
 
-                            // Step Progress Count
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = Color.Black.copy(alpha = 0.6f),
-                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                            // Step Progress Count & Live Percentage
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = Color(0xFF10B981).copy(alpha = 0.25f),
+                                    border = BorderStroke(1.dp, Color(0xFF10B981))
+                                ) {
+                                    Text(
+                                        text = "${totalProgressPct.toInt()}%",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color(0xFF34D399)
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = Color.Black.copy(alpha = 0.6f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                                ) {
+                                    Text(
+                                        text = "${currentStepIndex + 1}/${ENROLLMENT_STEPS.size}",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Live Status Bar: ETA remaining & Elapsed time
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.HourglassBottom,
+                                    contentDescription = null,
+                                    tint = Color(0xFF38BDF8),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "${currentStepIndex + 1}/${ENROLLMENT_STEPS.size}",
-                                    style = MaterialTheme.typography.labelMedium.copy(
+                                    text = "বাকি সময়: ~${estimatedRemainingSeconds} সেকেন্ড",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.5.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    ),
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                        color = Color(0xFF38BDF8)
+                                    )
+                                )
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AccessTime,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "সময়: ${elapsedSeconds}s",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.5.sp,
+                                        color = Color.White.copy(alpha = 0.7f)
+                                    )
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
 
                         // Step Progression Bar
                         Row(
@@ -865,8 +965,8 @@ fun FaceEnrollmentDialog(
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .height(4.dp)
-                                        .clip(RoundedCornerShape(2.dp))
+                                        .height(5.dp)
+                                        .clip(RoundedCornerShape(2.5.dp))
                                         .background(
                                             when {
                                                 isDone -> Color(0xFF10B981)
@@ -935,11 +1035,32 @@ fun FaceEnrollmentDialog(
                                     textAlign = TextAlign.Center
                                 )
 
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                // Live Mini ETA & Percentage status inside HUD
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color.White.copy(alpha = 0.08f),
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "মোট অগ্রগতি: ${totalProgressPct.toInt()}% • আনুমানিক আর ~${estimatedRemainingSeconds} সে. বাকি",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = Color(0xFF38BDF8)
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(2.dp))
+
                                 Text(
                                     text = currentStep.instructionEn,
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = Color.White.copy(alpha = 0.55f),
-                                        fontSize = 11.sp
+                                        fontSize = 10.5.sp
                                     ),
                                     textAlign = TextAlign.Center
                                 )
