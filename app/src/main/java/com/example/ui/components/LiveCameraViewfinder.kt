@@ -155,7 +155,6 @@ fun LiveCameraViewfinder(
             imageCaptureUseCase = imageCapture
 
             val imageAnalysis = ImageAnalysis.Builder()
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setTargetResolution(android.util.Size(640, 480))
                 .build()
@@ -359,6 +358,7 @@ fun LiveCameraViewfinder(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                     scaleType = PreviewView.ScaleType.FILL_CENTER
                 }
                 previewViewInstance = previewView
@@ -447,32 +447,34 @@ fun LiveCameraViewfinder(
 
                 // Top Classification Banner for Live Single
                 liveSingleResult?.let { single ->
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 70.dp)
-                            .clip(RoundedCornerShape(14.dp)),
-                        color = Color.Black.copy(alpha = 0.75f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.5f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    if (single.confidence >= 0.20f && single.label.isNotBlank() && !single.label.startsWith("Scanning")) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 70.dp)
+                                .clip(RoundedCornerShape(14.dp)),
+                            color = Color.Black.copy(alpha = 0.75f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.5f))
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF22C55E))
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "⚡ ${single.label} • ${String.format(Locale.US, "%.1f%%", single.confidence * 100)} (${single.latencyMs}ms)",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF22C55E))
                                 )
-                            )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "⚡ ${single.label} • ${String.format(Locale.US, "%.1f%%", single.confidence * 100)} (${single.latencyMs}ms)",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                )
+                            }
                         }
                     }
                 }

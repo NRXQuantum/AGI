@@ -911,7 +911,7 @@ class ProjectRepository(
                 return@withContext PredictionResult(
                     classIndex = 0,
                     classLabel = "Scanning... (80 COCO Objects Ready)",
-                    confidence = 0.50f,
+                    confidence = 0f,
                     allProbabilities = emptyList(),
                     inferenceTimeMs = elapsed,
                     detectedObjects = emptyList()

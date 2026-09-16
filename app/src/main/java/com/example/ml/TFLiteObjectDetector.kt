@@ -56,6 +56,11 @@ class TFLiteObjectDetector(
     private var scoresIndex = 2
     private var numDetectionsIndex = 3
 
+    init {
+        loadLabelMap()
+        loadModel()
+    }
+
     companion object {
         val COCO_80_CLASSES = listOf(
             "Person", "Bicycle", "Car", "Motorcycle", "Airplane", "Bus", "Train", "Truck", "Boat",
