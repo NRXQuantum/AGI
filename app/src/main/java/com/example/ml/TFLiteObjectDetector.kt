@@ -66,6 +66,14 @@ class TFLiteObjectDetector(
     private var isChannelsFirst = false
 
     private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val letterboxBmp: Bitmap by lazy {
+        Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
+    }
+    private val letterboxCanvas: Canvas by lazy {
+        Canvas(letterboxBmp)
+    }
+    private val srcRect = android.graphics.Rect()
+    private val dstRect = android.graphics.Rect()
 
     init {
         initAnchors()
@@ -200,18 +208,13 @@ class TFLiteObjectDetector(
         val scaledW = (origW * scale).roundToInt().coerceIn(1, inputSize)
         val scaledH = (origH * scale).roundToInt().coerceIn(1, inputSize)
 
-        // 2. Render letterboxed image onto 416x416 canvas
-        val letterboxBmp = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(letterboxBmp)
-        canvas.drawColor(Color.rgb(114, 114, 114))
+        // 2. Render letterboxed image onto 416x416 reusable canvas
+        letterboxCanvas.drawColor(Color.rgb(114, 114, 114))
+        srcRect.set(0, 0, origW, origH)
+        dstRect.set(0, 0, scaledW, scaledH)
+        letterboxCanvas.drawBitmap(bitmap, srcRect, dstRect, letterboxPaint)
 
-        val scaledBmp = Bitmap.createScaledBitmap(bitmap, scaledW, scaledH, true)
-        canvas.drawBitmap(scaledBmp, 0f, 0f, letterboxPaint)
-        if (scaledBmp != bitmap) {
-            scaledBmp.recycle()
-        }
-
-        try {
+        return try {
             letterboxBmp.getPixels(pixelValues, 0, inputSize, 0, 0, inputSize, inputSize)
             inputBuffer.rewind()
 
@@ -326,11 +329,9 @@ class TFLiteObjectDetector(
             }
 
             // 6. Fast Non-Maximum Suppression (NMS) to eliminate duplicate overlapping boxes
-            return applyNMS(candidates, iouThreshold = 0.45f)
+            applyNMS(candidates, iouThreshold = 0.45f)
         } catch (_: Throwable) {
-            return emptyList()
-        } finally {
-            letterboxBmp.recycle()
+            emptyList()
         }
     }
 
@@ -377,5 +378,8 @@ class TFLiteObjectDetector(
             interpreter?.close()
         } catch (_: Throwable) {}
         interpreter = null
+        try {
+            letterboxBmp.recycle()
+        } catch (_: Throwable) {}
     }
 }

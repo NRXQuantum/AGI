@@ -852,22 +852,15 @@ class ProjectRepository(
                 val confList = mutableListOf<ClassConfidence>()
 
                 for (det in selectedDetections) {
-                    val refined = ObjectBoundaryRefiner.refineObjectBoundingBox(
-                        bitmap,
-                        det.leftNorm,
-                        det.topNorm,
-                        det.rightNorm,
-                        det.bottomNorm
-                    )
                     regions.add(
                         DetectedObjectRegion(
                             classIndex = det.classIndex,
                             classLabel = det.label,
                             confidence = det.score,
-                            boxLeftNorm = refined[0],
-                            boxTopNorm = refined[1],
-                            boxRightNorm = refined[2],
-                            boxBottomNorm = refined[3],
+                            boxLeftNorm = det.leftNorm,
+                            boxTopNorm = det.topNorm,
+                            boxRightNorm = det.rightNorm,
+                            boxBottomNorm = det.bottomNorm,
                             regionTitle = "${det.label} (${(det.score * 100).toInt()}%)"
                         )
                     )
@@ -1186,18 +1179,10 @@ class ProjectRepository(
 
                 val regions = mutableListOf<DetectedObjectRegion>()
                 for (det in selectedDetections) {
-                    // Snugly refine boundary to object physical contour, eliminating floor/shadow bloat
-                    val refined = ObjectBoundaryRefiner.refineObjectBoundingBox(
-                        bitmap,
-                        det.leftNorm,
-                        det.topNorm,
-                        det.rightNorm,
-                        det.bottomNorm
-                    )
-                    val boxL = refined[0]
-                    val boxT = refined[1]
-                    val boxR = refined[2]
-                    val boxB = refined[3]
+                    val boxL = det.leftNorm
+                    val boxT = det.topNorm
+                    val boxR = det.rightNorm
+                    val boxB = det.bottomNorm
 
                     var predLabel = det.label
                     var predConf = det.score

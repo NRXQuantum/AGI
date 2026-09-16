@@ -56,7 +56,8 @@ data class LiveDetectedBox(
     val topNorm: Float,
     val rightNorm: Float,
     val bottomNorm: Float,
-    val color: Color = Color(0xFF38BDF8)
+    val color: Color = Color(0xFF38BDF8),
+    val trackId: Int = 0
 )
 
 data class LiveSinglePrediction(
@@ -128,12 +129,7 @@ fun LiveCameraViewfinder(
     // Reset Kalman tracker on camera mode or lens switch to avoid cross-camera track drift
     LaunchedEffect(selectedMode, lensFacing) {
         cctvKalmanTracker.reset()
-    }
-
-    // One Euro Filter Trajectory Tracking & Deadband Stabilization
-    LaunchedEffect(liveMultiBoxes) {
-        val smoothed = cctvKalmanTracker.processFrame(liveMultiBoxes, System.currentTimeMillis())
-        smoothedBoxes = smoothed
+        smoothedBoxes = emptyList()
     }
 
     fun bindCameraSafely(
@@ -161,7 +157,7 @@ fun LiveCameraViewfinder(
 
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                 val now = System.currentTimeMillis()
-                if (selectedMode != CameraTestMode.CAPTURE && now - lastAnalysisTimestamp >= 35 && !isAnalyzing) {
+                if (selectedMode != CameraTestMode.CAPTURE && now - lastAnalysisTimestamp >= 30 && !isAnalyzing) {
                     lastAnalysisTimestamp = now
                     isAnalyzing = true
                     try {
@@ -179,8 +175,8 @@ fun LiveCameraViewfinder(
                             bmp
                         }
 
-                        // Ultra-fast downsampling: 360px max dimension for high-frequency ML Kit & contour processing
-                        val optimizedBmp = optimizeBitmapForInference(rotatedBmp, maxDimension = 360)
+                        // Optimal downsampling for high-speed inference
+                        val optimizedBmp = optimizeBitmapForInference(rotatedBmp, maxDimension = 416)
                         frameWidth = optimizedBmp.width
                         frameHeight = optimizedBmp.height
 
@@ -188,16 +184,19 @@ fun LiveCameraViewfinder(
                             try {
                                 val isMulti = (selectedMode == CameraTestMode.LIVE_MULTI)
                                 val (singlePred, multiBoxes) = onAnalyzeFrame(optimizedBmp, isMulti)
+                                val coloredBoxes = multiBoxes.map { box ->
+                                    val boxCol = if (box.color == Color(0xFF38BDF8) || box.color == Color.Green) {
+                                        primaryDetectionBlue
+                                    } else {
+                                        box.color
+                                    }
+                                    box.copy(color = boxCol)
+                                }
+                                val smoothed = cctvKalmanTracker.processFrame(coloredBoxes, System.currentTimeMillis())
                                 withContext(Dispatchers.Main) {
                                     liveSingleResult = singlePred
-                                    liveMultiBoxes = multiBoxes.map { box ->
-                                        val boxCol = if (box.color == Color(0xFF38BDF8) || box.color == Color.Green) {
-                                            primaryDetectionBlue
-                                        } else {
-                                            box.color
-                                        }
-                                        box.copy(color = boxCol)
-                                    }
+                                    liveMultiBoxes = coloredBoxes
+                                    smoothedBoxes = smoothed
                                 }
                             } finally {
                                 if (optimizedBmp != rotatedBmp) optimizedBmp.recycle()
@@ -814,133 +813,178 @@ private fun DynamicBoundingBoxesOverlay(
         val screenW = maxWidth
         val screenH = maxHeight
 
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
+        val wPx = with(density) { screenW.toPx() }
+        val hPx = with(density) { screenH.toPx() }
 
-            val bmpW = if (frameWidth > 0) frameWidth.toFloat() else w
-            val bmpH = if (frameHeight > 0) frameHeight.toFloat() else h
+        val bmpW = if (frameWidth > 0) frameWidth.toFloat() else wPx
+        val bmpH = if (frameHeight > 0) frameHeight.toFloat() else hPx
 
-            // PreviewView FILL_CENTER projection scale and offsets
-            val scale = maxOf(w / bmpW, h / bmpH)
-            val renderedW = bmpW * scale
-            val renderedH = bmpH * scale
-            val offsetX = (w - renderedW) / 2f
-            val offsetY = (h - renderedH) / 2f
+        val scale = maxOf(wPx / bmpW, hPx / bmpH)
+        val renderedW = bmpW * scale
+        val renderedH = bmpH * scale
+        val offsetX = (wPx - renderedW) / 2f
+        val offsetY = (hPx - renderedH) / 2f
 
-            for (box in boxes) {
-                val rawLeft = offsetX + box.leftNorm * renderedW
-                val rawTop = offsetY + box.topNorm * renderedH
-                val rawRight = offsetX + box.rightNorm * renderedW
-                val rawBottom = offsetY + box.bottomNorm * renderedH
-
-                val left = rawLeft.coerceIn(0f, maxOf(0f, w - 12f))
-                val top = rawTop.coerceIn(0f, maxOf(0f, h - 12f))
-                val minR = minOf(w, left + 8f)
-                val right = rawRight.coerceIn(minR, w)
-                val minB = minOf(h, top + 8f)
-                val bottom = rawBottom.coerceIn(minB, h)
-                val boxW = maxOf(4f, right - left)
-                val boxH = maxOf(4f, bottom - top)
-
-                // 1. Subtle transparent futuristic tint inside box
-                drawRoundRect(
-                    color = box.color.copy(alpha = 0.08f),
-                    topLeft = Offset(left, top),
-                    size = Size(boxW, boxH),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(10f, 10f)
+        for (box in boxes) {
+            key(box.trackId) {
+                SmoothTrackedBox(
+                    box = box,
+                    offsetX = offsetX,
+                    offsetY = offsetY,
+                    renderedW = renderedW,
+                    renderedH = renderedH,
+                    wPx = wPx,
+                    hPx = hPx,
+                    screenW = screenW,
+                    screenH = screenH,
+                    density = density
                 )
-
-                // 2. High-visibility crisp bounding box outline
-                drawRoundRect(
-                    color = box.color.copy(alpha = 0.55f),
-                    topLeft = Offset(left, top),
-                    size = Size(boxW, boxH),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(10f, 10f),
-                    style = Stroke(width = 1.5f)
-                )
-
-                // 3. CCTV / OpenCV 4-Corner Reinforced Precision Brackets
-                val cornerLen = minOf(boxW, boxH) * 0.22f
-                val cornerStroke = 3.5f
-
-                // Top-Left Corner
-                drawLine(box.color, Offset(left, top), Offset(left + cornerLen, top), cornerStroke)
-                drawLine(box.color, Offset(left, top), Offset(left, top + cornerLen), cornerStroke)
-
-                // Top-Right Corner
-                drawLine(box.color, Offset(right, top), Offset(right - cornerLen, top), cornerStroke)
-                drawLine(box.color, Offset(right, top), Offset(right, top + cornerLen), cornerStroke)
-
-                // Bottom-Left Corner
-                drawLine(box.color, Offset(left, bottom), Offset(left + cornerLen, bottom), cornerStroke)
-                drawLine(box.color, Offset(left, bottom), Offset(left, bottom - cornerLen), cornerStroke)
-
-                // Bottom-Right Corner
-                drawLine(box.color, Offset(right, bottom), Offset(right - cornerLen, bottom), cornerStroke)
-                drawLine(box.color, Offset(right, bottom), Offset(right, bottom - cornerLen), cornerStroke)
-
-                // 4. Optical Center Crosshair (+) for CCTV centroid tracking
-                val centerX = left + boxW / 2f
-                val centerY = top + boxH / 2f
-                val chLen = 6f
-                drawLine(box.color.copy(alpha = 0.85f), Offset(centerX - chLen, centerY), Offset(centerX + chLen, centerY), 2f)
-                drawLine(box.color.copy(alpha = 0.85f), Offset(centerX, centerY - chLen), Offset(centerX, centerY + chLen), 2f)
             }
         }
+    }
+}
 
-        // Overlay Attached Badges for Each Box (Solid blue with white bold text, attached at top)
-        boxes.forEach { box ->
-            val wPx = with(density) { screenW.toPx() }
-            val hPx = with(density) { screenH.toPx() }
+@Composable
+private fun SmoothTrackedBox(
+    box: LiveDetectedBox,
+    offsetX: Float,
+    offsetY: Float,
+    renderedW: Float,
+    renderedH: Float,
+    wPx: Float,
+    hPx: Float,
+    screenW: androidx.compose.ui.unit.Dp,
+    screenH: androidx.compose.ui.unit.Dp,
+    density: androidx.compose.ui.unit.Density
+) {
+    // 60 FPS Fluid Spring Interpolation: tracks camera motion smoothly without stutter
+    val animLeft by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = box.leftNorm,
+        animationSpec = androidx.compose.animation.core.spring(
+            stiffness = 1000f,
+            dampingRatio = 0.92f
+        ),
+        label = "boxLeft"
+    )
+    val animTop by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = box.topNorm,
+        animationSpec = androidx.compose.animation.core.spring(
+            stiffness = 1000f,
+            dampingRatio = 0.92f
+        ),
+        label = "boxTop"
+    )
+    val animRight by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = box.rightNorm,
+        animationSpec = androidx.compose.animation.core.spring(
+            stiffness = 1000f,
+            dampingRatio = 0.92f
+        ),
+        label = "boxRight"
+    )
+    val animBottom by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = box.bottomNorm,
+        animationSpec = androidx.compose.animation.core.spring(
+            stiffness = 1000f,
+            dampingRatio = 0.92f
+        ),
+        label = "boxBottom"
+    )
 
-            val bmpW = if (frameWidth > 0) frameWidth.toFloat() else wPx
-            val bmpH = if (frameHeight > 0) frameHeight.toFloat() else hPx
+    val rawLeft = offsetX + animLeft * renderedW
+    val rawTop = offsetY + animTop * renderedH
+    val rawRight = offsetX + animRight * renderedW
+    val rawBottom = offsetY + animBottom * renderedH
 
-            val scale = maxOf(wPx / bmpW, hPx / bmpH)
-            val renderedW = bmpW * scale
-            val renderedH = bmpH * scale
-            val offsetX = (wPx - renderedW) / 2f
-            val offsetY = (hPx - renderedH) / 2f
+    val left = rawLeft.coerceIn(0f, maxOf(0f, wPx - 12f))
+    val top = rawTop.coerceIn(0f, maxOf(0f, hPx - 12f))
+    val minR = minOf(wPx, left + 8f)
+    val right = rawRight.coerceIn(minR, wPx)
+    val minB = minOf(hPx, top + 8f)
+    val bottom = rawBottom.coerceIn(minB, hPx)
+    val boxW = maxOf(4f, right - left)
+    val boxH = maxOf(4f, bottom - top)
 
-            val leftPx = (offsetX + box.leftNorm * renderedW).coerceIn(0f, maxOf(0f, wPx - 16f))
-            val topPx = (offsetY + box.topNorm * renderedH).coerceIn(0f, maxOf(0f, hPx - 16f))
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        // 1. Transparent futuristic tint inside box
+        drawRoundRect(
+            color = box.color.copy(alpha = 0.08f),
+            topLeft = Offset(left, top),
+            size = Size(boxW, boxH),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(10f, 10f)
+        )
 
-            val leftDp = with(density) { leftPx.toDp() }
-            val topDp = with(density) { topPx.toDp() }
+        // 2. High-visibility crisp bounding box outline
+        drawRoundRect(
+            color = box.color.copy(alpha = 0.55f),
+            topLeft = Offset(left, top),
+            size = Size(boxW, boxH),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(10f, 10f),
+            style = Stroke(width = 1.5f)
+        )
 
-            val maxBadgeY = maxOf(68.dp, screenH - 120.dp)
-            val badgeY = (if (topDp >= 80.dp) topDp - 28.dp else topDp + 6.dp).coerceIn(68.dp, maxBadgeY)
-            val maxBadgeX = maxOf(12.dp, screenW - 140.dp)
-            val badgeX = leftDp.coerceIn(12.dp, maxBadgeX)
+        // 3. CCTV / OpenCV 4-Corner Reinforced Precision Brackets
+        val cornerLen = minOf(boxW, boxH) * 0.22f
+        val cornerStroke = 3.5f
 
-            Surface(
+        // Top-Left Corner
+        drawLine(box.color, Offset(left, top), Offset(left + cornerLen, top), cornerStroke)
+        drawLine(box.color, Offset(left, top), Offset(left, top + cornerLen), cornerStroke)
+
+        // Top-Right Corner
+        drawLine(box.color, Offset(right, top), Offset(right - cornerLen, top), cornerStroke)
+        drawLine(box.color, Offset(right, top), Offset(right, top + cornerLen), cornerStroke)
+
+        // Bottom-Left Corner
+        drawLine(box.color, Offset(left, bottom), Offset(left + cornerLen, bottom), cornerStroke)
+        drawLine(box.color, Offset(left, bottom), Offset(left, bottom - cornerLen), cornerStroke)
+
+        // Bottom-Right Corner
+        drawLine(box.color, Offset(right, bottom), Offset(right - cornerLen, bottom), cornerStroke)
+        drawLine(box.color, Offset(right, bottom), Offset(right, bottom - cornerLen), cornerStroke)
+
+        // 4. Optical Center Crosshair (+)
+        val centerX = left + boxW / 2f
+        val centerY = top + boxH / 2f
+        val chLen = 6f
+        drawLine(box.color.copy(alpha = 0.85f), Offset(centerX - chLen, centerY), Offset(centerX + chLen, centerY), 2f)
+        drawLine(box.color.copy(alpha = 0.85f), Offset(centerX, centerY - chLen), Offset(centerX, centerY + chLen), 2f)
+    }
+
+    // Badge attached directly to box coordinates
+    val leftDp = with(density) { left.toDp() }
+    val topDp = with(density) { top.toDp() }
+
+    val maxBadgeY = maxOf(68.dp, screenH - 120.dp)
+    val badgeY = (if (topDp >= 80.dp) topDp - 28.dp else topDp + 6.dp).coerceIn(68.dp, maxBadgeY)
+    val maxBadgeX = maxOf(12.dp, screenW - 140.dp)
+    val badgeX = leftDp.coerceIn(12.dp, maxBadgeX)
+
+    Surface(
+        modifier = Modifier
+            .offset(x = badgeX, y = badgeY)
+            .clip(RoundedCornerShape(6.dp)),
+        color = box.color,
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
                 modifier = Modifier
-                    .offset(x = badgeX, y = badgeY)
-                    .clip(RoundedCornerShape(6.dp)),
-                color = box.color,
-                shadowElevation = 4.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                    )
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                        text = "${box.label} ${String.format(Locale.US, "%.1f%%", box.confidence * 100)}",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    )
-                }
-            }
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(Color.White)
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                text = "${box.label} ${String.format(Locale.US, "%.1f%%", box.confidence * 100)}",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            )
         }
     }
 }

@@ -14,8 +14,8 @@ import kotlin.math.min
  * - At high speed (panning/moving): dynamically increases cutoff frequency to eliminate lag and overshoot.
  */
 class OneEuroFilter(
-    private val minCutoff: Float = 0.75f, // Base cutoff frequency in Hz when stationary
-    private val beta: Float = 0.005f,     // Speed coefficient for responsiveness during motion
+    private val minCutoff: Float = 1.0f,  // Base cutoff frequency in Hz when stationary (suppresses jitter)
+    private val beta: Float = 0.035f,     // Speed coefficient for fluid responsiveness during motion
     private val dCutoff: Float = 1.0f     // Derivative cutoff frequency in Hz
 ) {
     private var xPrev = 0f
@@ -86,11 +86,14 @@ class KalmanBoxTrack(
     private val filterR = OneEuroFilter().apply { setValue(initialBox.rightNorm) }
     private val filterB = OneEuroFilter().apply { setValue(initialBox.bottomNorm) }
 
-    // Last filtered coordinates for deadband comparison
     var leftNorm: Float = initialBox.leftNorm
     var topNorm: Float = initialBox.topNorm
     var rightNorm: Float = initialBox.rightNorm
     var bottomNorm: Float = initialBox.bottomNorm
+
+    // Velocity estimates for smooth coasting across missed frames
+    private var vx: Float = 0f
+    private var vy: Float = 0f
 
     // Metadata
     var label: String = initialBox.label
@@ -104,45 +107,53 @@ class KalmanBoxTrack(
      */
     fun predict(currentTimestampMs: Long) {
         timeSinceUpdate++
+        val dt = ((currentTimestampMs - timestampMs) / 1000f).coerceIn(0.01f, 0.15f)
         timestampMs = currentTimestampMs
+
+        // Extrapolate smoothly along estimated velocity vector if temporarily missed
+        if (timeSinceUpdate in 1..4 && (abs(vx) > 0.01f || abs(vy) > 0.01f)) {
+            vx *= 0.85f
+            vy *= 0.85f
+            leftNorm = (leftNorm + vx * dt).coerceIn(0.005f, 0.95f)
+            rightNorm = (rightNorm + vx * dt).coerceIn(0.02f, 0.995f)
+            topNorm = (topNorm + vy * dt).coerceIn(0.005f, 0.95f)
+            bottomNorm = (bottomNorm + vy * dt).coerceIn(0.02f, 0.995f)
+        }
     }
 
     /**
-     * Measurement update with deadband suppression:
-     * If the object has moved less than 2.0% of screen coordinates, freeze completely to kill all tremor.
-     * Otherwise, smoothly filter coordinates without overshoot.
+     * Fluid measurement update without deadband freezing.
+     * Continuously adapts filter cutoff based on instantaneous motion velocity.
      */
     fun update(measurement: LiveDetectedBox, currentTimestampMs: Long) {
+        val dt = ((currentTimestampMs - timestampMs) / 1000f).coerceIn(0.01f, 0.25f)
         timestampMs = currentTimestampMs
         hits++
         timeSinceUpdate = 0
 
-        val deltaL = abs(measurement.leftNorm - leftNorm)
-        val deltaT = abs(measurement.topNorm - topNorm)
-        val deltaR = abs(measurement.rightNorm - rightNorm)
-        val deltaB = abs(measurement.bottomNorm - bottomNorm)
-        val totalDisplacement = deltaL + deltaT + deltaR + deltaB
+        val oldCx = (leftNorm + rightNorm) / 2f
+        val oldCy = (topNorm + bottomNorm) / 2f
 
-        // Deadband Stabilization: If displacement is minor camera shake (< 1.8%), hold box rock steady
-        if (totalDisplacement >= 0.018f) {
-            leftNorm = filterL.filter(measurement.leftNorm, currentTimestampMs)
-            topNorm = filterT.filter(measurement.topNorm, currentTimestampMs)
-            rightNorm = filterR.filter(measurement.rightNorm, currentTimestampMs)
-            bottomNorm = filterB.filter(measurement.bottomNorm, currentTimestampMs)
-        } else {
-            // Keep filter internal clock updated with current smoothed value
-            filterL.filter(leftNorm, currentTimestampMs)
-            filterT.filter(topNorm, currentTimestampMs)
-            filterR.filter(rightNorm, currentTimestampMs)
-            filterB.filter(bottomNorm, currentTimestampMs)
-        }
+        // Continuous One Euro filtering: removes jitter while stationary, moves seamlessly during motion
+        leftNorm = filterL.filter(measurement.leftNorm, currentTimestampMs)
+        topNorm = filterT.filter(measurement.topNorm, currentTimestampMs)
+        rightNorm = filterR.filter(measurement.rightNorm, currentTimestampMs)
+        bottomNorm = filterB.filter(measurement.bottomNorm, currentTimestampMs)
+
+        val newCx = (leftNorm + rightNorm) / 2f
+        val newCy = (topNorm + bottomNorm) / 2f
+
+        val instVx = (newCx - oldCx) / dt
+        val instVy = (newCy - oldCy) / dt
+        vx = vx * 0.4f + instVx * 0.6f
+        vy = vy * 0.4f + instVy * 0.6f
 
         // Label stabilization with strong hysteresis
-        if (measurement.label == label || measurement.confidence >= (confidence + 0.12f)) {
+        if (measurement.label == label || measurement.confidence >= (confidence + 0.10f)) {
             label = measurement.label
             confidence = measurement.confidence
         } else {
-            confidence = (confidence * 0.85f) + (measurement.confidence * 0.15f)
+            confidence = (confidence * 0.80f) + (measurement.confidence * 0.20f)
         }
         color = measurement.color
     }
@@ -151,12 +162,12 @@ class KalmanBoxTrack(
      * Converts current state into a LiveDetectedBox with guaranteed crash-proof bounds.
      */
     fun toLiveDetectedBox(): LiveDetectedBox {
-        val safeL = leftNorm.coerceIn(0.01f, 0.90f)
-        val safeT = topNorm.coerceIn(0.01f, 0.90f)
-        val minR = (safeL + 0.04f).coerceAtMost(0.99f)
-        val minB = (safeT + 0.04f).coerceAtMost(0.99f)
-        val safeR = rightNorm.coerceIn(minR, 0.99f)
-        val safeB = bottomNorm.coerceIn(minB, 0.99f)
+        val safeL = leftNorm.coerceIn(0.005f, 0.95f)
+        val safeT = topNorm.coerceIn(0.005f, 0.95f)
+        val minR = (safeL + 0.02f).coerceAtMost(0.995f)
+        val minB = (safeT + 0.02f).coerceAtMost(0.995f)
+        val safeR = rightNorm.coerceIn(minR, 0.995f)
+        val safeB = bottomNorm.coerceIn(minB, 0.995f)
 
         return LiveDetectedBox(
             label = label,
@@ -165,7 +176,8 @@ class KalmanBoxTrack(
             topNorm = safeT,
             rightNorm = safeR,
             bottomNorm = safeB,
-            color = color
+            color = color,
+            trackId = id
         )
     }
 }
