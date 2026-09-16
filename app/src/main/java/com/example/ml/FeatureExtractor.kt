@@ -90,7 +90,7 @@ class FeatureExtractor(
             if (origW <= 0 || origH <= 0) return null
 
             var inSampleSize = 1
-            val targetSize = 256
+            val targetSize = 224
             while ((origW / (inSampleSize * 2)) >= targetSize && (origH / (inSampleSize * 2)) >= targetSize) {
                 inSampleSize *= 2
             }
