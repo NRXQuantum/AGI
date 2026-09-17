@@ -42,6 +42,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.ml.DetectedObjectRegion
 import com.example.ui.components.LiveCameraViewfinder
 import com.example.ui.components.CameraTestMode
@@ -234,6 +240,7 @@ fun InferenceScreen(
     var showBoundingBoxOverlay by remember { mutableStateOf(true) }
     var showBodyContourOverlay by remember { mutableStateOf(true) }
     var showFacialMeshOverlay by remember { mutableStateOf(true) }
+    var showEnlargedPhotoViewer by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
@@ -1073,15 +1080,46 @@ fun InferenceScreen(
                                     label = { Text("🕸️ Mesh", fontSize = 10.sp) },
                                     modifier = Modifier.height(26.dp)
                                 )
+                                // 4. Enlarge / Zoom Button
+                                Surface(
+                                    onClick = { showEnlargedPhotoViewer = true },
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                                    modifier = Modifier.testTag("enlarge_photo_top_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ZoomIn,
+                                            contentDescription = "Zoom / Enlarge",
+                                            modifier = Modifier.size(13.dp),
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        Text(
+                                            text = "বড় করুন",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 10.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
                             }
                         }
 
-                        // Framed Photo Viewfinder
+                        // Framed Photo Viewfinder (Tappable to enlarge full-screen)
                         Surface(
+                            onClick = { showEnlargedPhotoViewer = true },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(220.dp)
-                                .clip(RoundedCornerShape(10.dp)),
+                                .clip(RoundedCornerShape(10.dp))
+                                .testTag("framed_test_photo_viewfinder"),
                             color = Color(0xFF0F172A),
                             border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
                         ) {
@@ -1338,13 +1376,43 @@ fun InferenceScreen(
                                             }
                                         }
                                     }
+
+                                    // Floating Tap-to-Enlarge Badge on Top-Right Corner
+                                    Surface(
+                                        onClick = { showEnlargedPhotoViewer = true },
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(6.dp),
+                                        color = Color.Black.copy(alpha = 0.70f),
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(0.8.dp, Color.White.copy(alpha = 0.35f))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Fullscreen,
+                                                contentDescription = "Full Screen Zoom",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Text(
+                                                text = "Zoom 🔍",
+                                                fontSize = 9.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Clear and Change Action Row
+                        // Clear, Change, and Enlarge Action Row
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1379,6 +1447,23 @@ fun InferenceScreen(
                                 Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Camera", style = MaterialTheme.typography.labelMedium)
+                            }
+
+                            Button(
+                                onClick = { showEnlargedPhotoViewer = true },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .height(38.dp)
+                                    .testTag("enlarge_test_photo_bottom_btn"),
+                                contentPadding = PaddingValues(horizontal = 10.dp)
+                            ) {
+                                Icon(Icons.Default.ZoomIn, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("বড় দেখুন", style = MaterialTheme.typography.labelMedium)
                             }
 
                             Button(
@@ -1905,36 +1990,64 @@ fun InferenceScreen(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                res.allProbabilities.forEach { prob ->
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Text(
-                                                text = prob.classLabel,
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                            )
-                                            Text(
-                                                text = "${String.format(Locale.US, "%.1f", prob.probability * 100)}%",
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = if (prob.classIndex == res.classIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            val isNoSubject = res.confidence == 0f || res.allProbabilities.isEmpty() || res.classLabel.startsWith("No ")
+                            if (isNoSubject) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Info,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (isFaceMode) "কোনো ব্যক্তির মুখ বা বায়োমেট্রিক ফ্রেম পাওয়া যায়নি (No Face Subject Detected)।"
+                                            else "কোনো বিষয়বস্তু বা বস্তু শনাক্ত হয়নি (No Object Detected)।",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            } else {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    res.allProbabilities.forEach { prob ->
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = prob.classLabel,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                )
+                                                Text(
+                                                    text = "${String.format(Locale.US, "%.1f", prob.probability * 100)}%",
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                    color = if (prob.classIndex == res.classIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(3.dp))
+                                            LinearProgressIndicator(
+                                                progress = { prob.probability },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(6.dp)
+                                                    .clip(RoundedCornerShape(3.dp)),
+                                                color = if (prob.classIndex == res.classIndex) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.outlineVariant
                                             )
                                         }
-                                        Spacer(modifier = Modifier.height(3.dp))
-                                        LinearProgressIndicator(
-                                            progress = { prob.probability },
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(6.dp)
-                                                .clip(RoundedCornerShape(3.dp)),
-                                            color = if (prob.classIndex == res.classIndex) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.outlineVariant
-                                        )
                                     }
                                 }
                             }
@@ -2802,6 +2915,23 @@ fun InferenceScreen(
             }
         )
     }
+
+    // Enlarged Fullscreen High-Resolution Image Viewer
+    if (showEnlargedPhotoViewer && testBitmap != null) {
+        EnlargedPhotoViewerDialog(
+            bitmap = testBitmap!!,
+            inferenceResult = inferenceResult,
+            isFaceMode = isFaceMode,
+            detectionMode = detectionMode,
+            showBoundingBox = showBoundingBoxOverlay,
+            showBodyContour = showBodyContourOverlay,
+            showFacialMesh = showFacialMeshOverlay,
+            onToggleBoundingBox = { showBoundingBoxOverlay = !showBoundingBoxOverlay },
+            onToggleBodyContour = { showBodyContourOverlay = !showBodyContourOverlay },
+            onToggleFacialMesh = { showFacialMeshOverlay = !showFacialMeshOverlay },
+            onDismiss = { showEnlargedPhotoViewer = false }
+        )
+    }
     } // End of outer Box
 }
 
@@ -2845,6 +2975,437 @@ fun EnginePillTab(
                 color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
+        }
+    }
+}
+
+@Composable
+fun EnlargedPhotoViewerDialog(
+    bitmap: Bitmap,
+    inferenceResult: com.example.ml.PredictionResult?,
+    isFaceMode: Boolean,
+    detectionMode: ObjectDetectionMode,
+    showBoundingBox: Boolean,
+    showBodyContour: Boolean,
+    showFacialMesh: Boolean,
+    onToggleBoundingBox: () -> Unit,
+    onToggleBodyContour: () -> Unit,
+    onToggleFacialMesh: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    val objectColors = remember {
+        listOf(
+            Color(0xFF38BDF8),
+            Color(0xFF10B981),
+            Color(0xFFF59E0B),
+            Color(0xFFA855F7),
+            Color(0xFFF43F5E),
+            Color(0xFF06B6D4)
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("enlarged_photo_viewer_dialog"),
+            color = Color(0xFF020617)
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Interactive Zoomable / Pannable Photo and Biometric Overlays
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                scale = (scale * zoom).coerceIn(1f, 6f)
+                                if (scale > 1f) {
+                                    offset = Offset(
+                                        x = offset.x + pan.x,
+                                        y = offset.y + pan.y
+                                    )
+                                } else {
+                                    offset = Offset.Zero
+                                }
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    if (scale > 1.5f) {
+                                        scale = 1f
+                                        offset = Offset.Zero
+                                    } else {
+                                        scale = 2.5f
+                                    }
+                                }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    val containerW = maxWidth
+                    val containerH = maxHeight
+
+                    val imgW = bitmap.width.toFloat().coerceAtLeast(1f)
+                    val imgH = bitmap.height.toFloat().coerceAtLeast(1f)
+                    val imgAspect = imgW / imgH
+                    val containerAspect = (containerW / containerH).coerceAtLeast(0.01f)
+
+                    val (renderedW, renderedH) = if (imgAspect > containerAspect) {
+                        containerW to (containerW / imgAspect)
+                    } else {
+                        (containerH * imgAspect) to containerH
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(width = renderedW, height = renderedH)
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = offset.x
+                                translationY = offset.y
+                            }
+                    ) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "Enlarged Test Image",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        if (inferenceResult != null) {
+                            val detected = inferenceResult.detectedObjects
+
+                            // 1. Biometric & Structural Contour Layer
+                            if (showBodyContour || showFacialMesh) {
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val wPx = size.width
+                                    val hPx = size.height
+
+                                    for ((_, obj) in detected.withIndex()) {
+                                        // A. Body Contour
+                                        if (showBodyContour && obj.bodyContourPoints.isNotEmpty()) {
+                                            val contourPath = androidx.compose.ui.graphics.Path()
+                                            obj.bodyContourPoints.forEachIndexed { cIdx, pt ->
+                                                val px = pt.x * wPx
+                                                val py = pt.y * hPx
+                                                if (cIdx == 0) contourPath.moveTo(px, py) else contourPath.lineTo(px, py)
+                                            }
+                                            contourPath.close()
+
+                                            drawPath(
+                                                path = contourPath,
+                                                color = Color(0xFFFF6D00).copy(alpha = 0.35f),
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                    width = 6.dp.toPx(),
+                                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                                )
+                                            )
+                                            drawPath(
+                                                path = contourPath,
+                                                color = Color(0xFFFF8800),
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                    width = 2.5.dp.toPx(),
+                                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                                )
+                                            )
+                                        }
+
+                                        // B. Facial Mesh
+                                        if (showFacialMesh && obj.facialLandmarks.isNotEmpty()) {
+                                            val landmarkPx = obj.facialLandmarks.map { pt ->
+                                                Offset(pt.x * wPx, pt.y * hPx)
+                                            }
+
+                                            for (edge in obj.facialMeshEdges) {
+                                                if (edge.first < landmarkPx.size && edge.second < landmarkPx.size) {
+                                                    val p1 = landmarkPx[edge.first]
+                                                    val p2 = landmarkPx[edge.second]
+                                                    drawLine(
+                                                        color = Color(0xFF06B6D4).copy(alpha = 0.50f),
+                                                        start = p1,
+                                                        end = p2,
+                                                        strokeWidth = 2.8.dp.toPx()
+                                                    )
+                                                    drawLine(
+                                                        color = Color(0xFFE0F2FE),
+                                                        start = p1,
+                                                        end = p2,
+                                                        strokeWidth = 1.2.dp.toPx()
+                                                    )
+                                                }
+                                            }
+
+                                            for (pt in landmarkPx) {
+                                                drawCircle(
+                                                    color = Color(0xFF0284C7),
+                                                    radius = 2.2.dp.toPx(),
+                                                    center = pt
+                                                )
+                                                drawCircle(
+                                                    color = Color.White,
+                                                    radius = 1.1.dp.toPx(),
+                                                    center = pt
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 2. High-Definition Target Bounding Box Overlays
+                            if (showBoundingBox && detected.isNotEmpty()) {
+                                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                                    val fullW = maxWidth
+                                    val fullH = maxHeight
+
+                                    detected.forEachIndexed { idx, obj ->
+                                        val activeColor = objectColors[idx % objectColors.size]
+                                        val left = (obj.boxLeftNorm.coerceIn(0f, 1f) * fullW.value).dp
+                                        val top = (obj.boxTopNorm.coerceIn(0f, 1f) * fullH.value).dp
+                                        val width = (((obj.boxRightNorm - obj.boxLeftNorm).coerceIn(0.04f, 1f)) * fullW.value).dp
+                                        val height = (((obj.boxBottomNorm - obj.boxTopNorm).coerceIn(0.04f, 1f)) * fullH.value).dp
+                                        val isNearTop = obj.boxTopNorm < 0.12f
+
+                                        Box(
+                                            modifier = Modifier
+                                                .offset(x = left, y = top)
+                                                .size(width = width, height = height)
+                                        ) {
+                                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                                val strokeW = 2.5.dp.toPx()
+                                                val bracketLen = (size.minDimension * 0.28f).coerceIn(12.dp.toPx(), 28.dp.toPx())
+
+                                                drawRect(
+                                                    color = activeColor.copy(alpha = 0.15f),
+                                                    size = size
+                                                )
+
+                                                // 4 Corner brackets
+                                                drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(bracketLen, 0f), strokeWidth = strokeW)
+                                                drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(0f, bracketLen), strokeWidth = strokeW)
+                                                drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width - bracketLen, 0f), strokeWidth = strokeW)
+                                                drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width, bracketLen), strokeWidth = strokeW)
+                                                drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(bracketLen, size.height), strokeWidth = strokeW)
+                                                drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(0f, size.height - bracketLen), strokeWidth = strokeW)
+                                                drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width - bracketLen, size.height), strokeWidth = strokeW)
+                                                drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width, size.height - bracketLen), strokeWidth = strokeW)
+                                            }
+
+                                            // Label Badge
+                                            Surface(
+                                                modifier = Modifier
+                                                    .align(if (isNearTop) Alignment.BottomStart else Alignment.TopStart)
+                                                    .padding(4.dp),
+                                                color = activeColor,
+                                                shape = RoundedCornerShape(4.dp),
+                                                shadowElevation = 4.dp
+                                            ) {
+                                                Text(
+                                                    text = "${obj.classLabel} (${String.format(Locale.US, "%.0f%%", obj.confidence * 100)})",
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    ),
+                                                    color = Color.White,
+                                                    maxLines = 1,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Top Control Header Bar
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter),
+                    color = Color.Black.copy(alpha = 0.85f),
+                    border = BorderStroke(0.dp, Color.Transparent)
+                ) {
+                    Column(modifier = Modifier.statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = onDismiss,
+                                    modifier = Modifier.testTag("enlarged_photo_close_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Close",
+                                        tint = Color.White
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Column {
+                                    Text(
+                                        text = "High-Res Image Viewer",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "${bitmap.width} × ${bitmap.height} px • Zoom ${String.format(Locale.US, "%.1fx", scale)}",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                        color = Color(0xFF94A3B8)
+                                    )
+                                }
+                            }
+
+                            // Quick Zoom Buttons (+ / - / Reset)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        scale = (scale - 0.5f).coerceAtLeast(1f)
+                                        if (scale == 1f) offset = Offset.Zero
+                                    },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = Color.White, modifier = Modifier.size(18.dp))
+                                }
+
+                                Surface(
+                                    onClick = {
+                                        scale = if (scale > 1.2f) 1f else 2.5f
+                                        if (scale == 1f) offset = Offset.Zero
+                                    },
+                                    color = Color(0xFF1E293B),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, Color(0xFF475569))
+                                ) {
+                                    Text(
+                                        text = if (scale > 1.2f) "Reset" else "2x",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { scale = (scale + 0.5f).coerceAtMost(6f) },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = Color.White, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+
+                        // Layer Toggles Row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilterChip(
+                                selected = showBoundingBox,
+                                onClick = onToggleBoundingBox,
+                                label = { Text("▣ Body Frame", fontSize = 11.sp) },
+                                modifier = Modifier.height(28.dp)
+                            )
+                            FilterChip(
+                                selected = showBodyContour,
+                                onClick = onToggleBodyContour,
+                                label = { Text("📐 Contour", fontSize = 11.sp) },
+                                modifier = Modifier.height(28.dp)
+                            )
+                            FilterChip(
+                                selected = showFacialMesh,
+                                onClick = onToggleFacialMesh,
+                                label = { Text("🕸️ Mesh", fontSize = 11.sp) },
+                                modifier = Modifier.height(28.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Bottom Floating Biometric Summary Pill
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(12.dp),
+                    color = Color(0xFF0F172A).copy(alpha = 0.92f),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (inferenceResult != null && inferenceResult.confidence > 0f) Color(0xFF22C55E)
+                                            else Color(0xFF94A3B8)
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = inferenceResult?.classLabel ?: "No Prediction",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = Color.White
+                                )
+                            }
+
+                            if (inferenceResult != null && inferenceResult.confidence > 0f) {
+                                Surface(
+                                    color = Color(0xFF38BDF8).copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "${String.format(Locale.US, "%.1f%%", inferenceResult.confidence * 100)} (${inferenceResult.inferenceTimeMs}ms)",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF38BDF8)
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "💡 দুই আঙুল দিয়ে টেনে বড় (Pinch to zoom) এবং সরিয়ে দেখতে পারেন। Double-tap করে রিসেট করুন।",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = Color(0xFF94A3B8)
+                        )
+                    }
+                }
+            }
         }
     }
 }

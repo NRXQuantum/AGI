@@ -456,34 +456,46 @@ fun LiveCameraViewfinder(
 
                 // Top Classification Banner for Live Single
                 liveSingleResult?.let { single ->
-                    if (single.confidence >= 0.20f && single.label.isNotBlank() && !single.label.startsWith("Scanning")) {
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 70.dp)
-                                .clip(RoundedCornerShape(14.dp)),
-                            color = Color.Black.copy(alpha = 0.75f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.5f))
+                    val isSubjectPresent = single.confidence >= 0.30f &&
+                        single.label.isNotBlank() &&
+                        !single.label.startsWith("Scanning") &&
+                        !single.label.startsWith("No Person") &&
+                        !single.label.startsWith("No Object") &&
+                        !single.label.startsWith("No Subject")
+
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 70.dp)
+                            .clip(RoundedCornerShape(14.dp)),
+                        color = Color.Black.copy(alpha = 0.80f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isSubjectPresent) Color(0xFF2563EB).copy(alpha = 0.6f) else Color.White.copy(alpha = 0.2f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF22C55E))
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isSubjectPresent) Color(0xFF22C55E) else Color(0xFF94A3B8))
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isSubjectPresent) {
+                                    "⚡ ${single.label} • ${String.format(Locale.US, "%.1f%%", single.confidence * 100)} (${single.latencyMs}ms)"
+                                } else {
+                                    "🔍 ফ্রেম স্ক্যান করা হচ্ছে (কোনো বিষয়বস্তু নেই)"
+                                },
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "⚡ ${single.label} • ${String.format(Locale.US, "%.1f%%", single.confidence * 100)} (${single.latencyMs}ms)",
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                )
-                            }
+                            )
                         }
                     }
                 }
