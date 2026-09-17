@@ -1080,35 +1080,6 @@ fun InferenceScreen(
                                     label = { Text("🕸️ Mesh", fontSize = 10.sp) },
                                     modifier = Modifier.height(26.dp)
                                 )
-                                // 4. Enlarge / Zoom Button
-                                Surface(
-                                    onClick = { showEnlargedPhotoViewer = true },
-                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
-                                    modifier = Modifier.testTag("enlarge_photo_top_btn")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ZoomIn,
-                                            contentDescription = "Zoom / Enlarge",
-                                            modifier = Modifier.size(13.dp),
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                        Text(
-                                            text = "বড় করুন",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 10.sp
-                                            ),
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                    }
-                                }
                             }
                         }
 
@@ -1374,36 +1345,6 @@ fun InferenceScreen(
                                                     }
                                                 }
                                             }
-                                        }
-                                    }
-
-                                    // Floating Tap-to-Enlarge Badge on Top-Right Corner
-                                    Surface(
-                                        onClick = { showEnlargedPhotoViewer = true },
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(6.dp),
-                                        color = Color.Black.copy(alpha = 0.70f),
-                                        shape = RoundedCornerShape(6.dp),
-                                        border = BorderStroke(0.8.dp, Color.White.copy(alpha = 0.35f))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Fullscreen,
-                                                contentDescription = "Full Screen Zoom",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Text(
-                                                text = "Zoom 🔍",
-                                                fontSize = 9.5.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color.White
-                                            )
                                         }
                                     }
                                 }
