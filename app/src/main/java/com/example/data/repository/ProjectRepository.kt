@@ -760,7 +760,7 @@ class ProjectRepository(
                 if (faceBoxes.isNotEmpty()) {
                     for ((idx, box) in faceBoxes.withIndex()) {
                         val (landmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(box)
-                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(box, isFaceOnly = true)
+                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(box, isFaceOnly = true, bitmap = bitmap)
                         detectedRegions.add(
                             DetectedObjectRegion(
                                 classIndex = idx,
@@ -1293,7 +1293,7 @@ class ProjectRepository(
 
                 val helperEngine = FaceRecognitionEngine(context)
                 val (fLandmarks, fEdges) = helperEngine.generateFacialMeshAndLandmarks(faceBox)
-                val (fContour, fDiag) = helperEngine.generateBodySilhouetteContour(faceBox, isFaceOnly = true)
+                val (fContour, fDiag) = helperEngine.generateBodySilhouetteContour(faceBox, isFaceOnly = true, bitmap = bitmap)
                 helperEngine.close()
 
                 candidateRegions.add(
@@ -1398,7 +1398,7 @@ class ProjectRepository(
                         if (isDetPerson) {
                             val helperEngine = FaceRecognitionEngine(context)
                             val bBox = FaceBoundingBox(boxL, boxT, boxR, boxB, predConf)
-                            val (cPoints, cDiag) = helperEngine.generateBodySilhouetteContour(bBox, isFaceOnly = false)
+                            val (cPoints, cDiag) = helperEngine.generateBodySilhouetteContour(bBox, isFaceOnly = false, bitmap = bitmap)
                             helperEngine.close()
                             bContour = cPoints
                             bDiag = cDiag

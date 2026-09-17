@@ -87,6 +87,9 @@ class FaceRecognitionEngine(private val context: Context) {
     private val tfliteDetector: TFLiteObjectDetector by lazy {
         TFLiteObjectDetector(context)
     }
+    private val bodySegmenter: PersonBodySegmenter by lazy {
+        PersonBodySegmenter(isStreamMode = false)
+    }
 
     /**
      * Multi-Scale High-Precision Face Detector.
@@ -712,7 +715,7 @@ class FaceRecognitionEngine(private val context: Context) {
             }
 
             val (landmarks, edges) = generateFacialMeshAndLandmarks(faceBox)
-            val (contour, diag) = generateBodySilhouetteContour(faceBox, isFaceOnly = true)
+            val (contour, diag) = generateBodySilhouetteContour(faceBox, isFaceOnly = true, bitmap = sceneBitmap)
 
             results.add(
                 IdentifiedPerson(
@@ -765,7 +768,7 @@ class FaceRecognitionEngine(private val context: Context) {
                 "Unknown Person"
             }
 
-            val (bodyContour, statureDiag) = generateBodySilhouetteContour(bodyBox, isFaceOnly = false)
+            val (bodyContour, statureDiag) = generateBodySilhouetteContour(bodyBox, isFaceOnly = false, bitmap = sceneBitmap)
 
             results.add(
                 IdentifiedPerson(
@@ -865,7 +868,17 @@ class FaceRecognitionEngine(private val context: Context) {
         val w = (r - l).coerceAtLeast(0.01f)
         val h = (b - t).coerceAtLeast(0.01f)
 
-        // If bitmap is provided, perform image-aware adaptive body silhouette contour extraction!
+        // 1. Primary Neural Human Segmentation: ML Kit Selfie Segmentation detects hands, raised arms, gestures, and true silhouettes
+        if (bitmap != null && !bitmap.isRecycled && bitmap.width > 16 && bitmap.height > 16) {
+            try {
+                val (mlContour, mlDiag) = bodySegmenter.extractBodyContourSync(bitmap, box)
+                if (mlContour.isNotEmpty()) {
+                    return Pair(mlContour, mlDiag)
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // 2. Fallback: image-aware adaptive boundary scanning
         if (bitmap != null && !bitmap.isRecycled && bitmap.width > 10 && bitmap.height > 10) {
             try {
                 val bmpW = bitmap.width
@@ -1271,6 +1284,9 @@ class FaceRecognitionEngine(private val context: Context) {
         featureExtractor.close()
         try {
             tfliteDetector.close()
+        } catch (_: Throwable) {}
+        try {
+            bodySegmenter.close()
         } catch (_: Throwable) {}
     }
 }
