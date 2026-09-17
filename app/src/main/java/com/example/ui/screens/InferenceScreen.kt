@@ -230,6 +230,11 @@ fun InferenceScreen(
         }
     }
 
+    // Interactive Testing Overlay Visibility States (Instant toggle without re-scanning)
+    var showBoundingBoxOverlay by remember { mutableStateOf(true) }
+    var showBodyContourOverlay by remember { mutableStateOf(true) }
+    var showFacialMeshOverlay by remember { mutableStateOf(true) }
+
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -996,6 +1001,81 @@ fun InferenceScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     if (testBitmap != null) {
+                        // Quick 1-Click Interactive Overlay Controls (Instantly toggle elements without re-scanning)
+                        val allOverlaysHidden = !showBoundingBoxOverlay && !showBodyContourOverlay && !showFacialMeshOverlay
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Master 1-Click Hide/Show All Toggle Button
+                            Surface(
+                                onClick = {
+                                    val nextState = allOverlaysHidden
+                                    showBoundingBoxOverlay = nextState
+                                    showBodyContourOverlay = nextState
+                                    showFacialMeshOverlay = nextState
+                                },
+                                color = if (allOverlaysHidden) Color(0xFFEF4444).copy(alpha = 0.18f) else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (allOverlaysHidden) Color(0xFFEF4444).copy(alpha = 0.7f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (allOverlaysHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(13.dp),
+                                        tint = if (allOverlaysHidden) Color(0xFFF87171) else MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = if (allOverlaysHidden) "Show All" else "Hide All",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        ),
+                                        color = if (allOverlaysHidden) Color(0xFFF87171) else MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+
+                            // Layer Specific Toggles
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 1. Body Frame
+                                FilterChip(
+                                    selected = showBoundingBoxOverlay,
+                                    onClick = { showBoundingBoxOverlay = !showBoundingBoxOverlay },
+                                    label = { Text("▣ Body", fontSize = 10.sp) },
+                                    modifier = Modifier.height(26.dp)
+                                )
+                                // 2. Body Contour
+                                FilterChip(
+                                    selected = showBodyContourOverlay,
+                                    onClick = { showBodyContourOverlay = !showBodyContourOverlay },
+                                    label = { Text("📐 Contour", fontSize = 10.sp) },
+                                    modifier = Modifier.height(26.dp)
+                                )
+                                // 3. Face Mesh
+                                FilterChip(
+                                    selected = showFacialMeshOverlay,
+                                    onClick = { showFacialMeshOverlay = !showFacialMeshOverlay },
+                                    label = { Text("🕸️ Mesh", fontSize = 10.sp) },
+                                    modifier = Modifier.height(26.dp)
+                                )
+                            }
+                        }
+
                         // Framed Photo Viewfinder
                         Surface(
                             modifier = Modifier
@@ -1040,200 +1120,205 @@ fun InferenceScreen(
                                         val detected = inferenceResult!!.detectedObjects
 
                                         // 1. Full-Resolution Biometric & Structural Contour Layer
-                                        Canvas(modifier = Modifier.fillMaxSize()) {
-                                            val wPx = size.width
-                                            val hPx = size.height
+                                        if (showBodyContourOverlay || showFacialMeshOverlay) {
+                                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                                val wPx = size.width
+                                                val hPx = size.height
 
-                                            for ((idx, obj) in detected.withIndex()) {
-                                                // A. Structural Body / Stature Silhouette Contour
-                                                if (obj.bodyContourPoints.isNotEmpty()) {
-                                                    val contourPath = androidx.compose.ui.graphics.Path()
-                                                    obj.bodyContourPoints.forEachIndexed { cIdx, pt ->
-                                                        val px = pt.x * wPx
-                                                        val py = pt.y * hPx
-                                                        if (cIdx == 0) contourPath.moveTo(px, py) else contourPath.lineTo(px, py)
-                                                    }
-                                                    contourPath.close()
-                                                    drawPath(
-                                                        path = contourPath,
-                                                        color = Color(0xFFF59E0B).copy(alpha = 0.70f),
-                                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                                            width = 2.dp.toPx(),
-                                                            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
-                                                        )
-                                                    )
-                                                }
-
-                                                // B. 3D Geodesic Facial Topology Mesh (Wireframe + Micro-Nodes)
-                                                if (obj.facialLandmarks.isNotEmpty()) {
-                                                    val landmarkPx = obj.facialLandmarks.map { pt ->
-                                                        Offset(pt.x * wPx, pt.y * hPx)
-                                                    }
-
-                                                    // Wireframe dual-glow edges
-                                                    for (edge in obj.facialMeshEdges) {
-                                                        if (edge.first < landmarkPx.size && edge.second < landmarkPx.size) {
-                                                            val p1 = landmarkPx[edge.first]
-                                                            val p2 = landmarkPx[edge.second]
-                                                            // Soft Cyan Glow Halo
-                                                            drawLine(
-                                                                color = Color(0xFF06B6D4).copy(alpha = 0.50f),
-                                                                start = p1,
-                                                                end = p2,
-                                                                strokeWidth = 2.8.dp.toPx()
-                                                            )
-                                                            // Core Brilliant White-Cyan Line
-                                                            drawLine(
-                                                                color = Color(0xFFF0F9FF).copy(alpha = 0.95f),
-                                                                start = p1,
-                                                                end = p2,
-                                                                strokeWidth = 1.3.dp.toPx()
-                                                             )
+                                                for ((idx, obj) in detected.withIndex()) {
+                                                    // A. Structural Body / Stature Silhouette Contour
+                                                    if (showBodyContourOverlay && obj.bodyContourPoints.isNotEmpty()) {
+                                                        val contourPath = androidx.compose.ui.graphics.Path()
+                                                        obj.bodyContourPoints.forEachIndexed { cIdx, pt ->
+                                                            val px = pt.x * wPx
+                                                            val py = pt.y * hPx
+                                                            if (cIdx == 0) contourPath.moveTo(px, py) else contourPath.lineTo(px, py)
                                                         }
+                                                        contourPath.close()
+                                                        drawPath(
+                                                            path = contourPath,
+                                                            color = Color(0xFFF59E0B).copy(alpha = 0.70f),
+                                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                                width = 2.dp.toPx(),
+                                                                pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+                                                            )
+                                                        )
                                                     }
 
-                                                    // Glowing biometric node vertices
-                                                    for (pt in landmarkPx) {
-                                                        drawCircle(
-                                                            color = Color(0xFF06B6D4).copy(alpha = 0.55f),
-                                                            radius = 4.5.dp.toPx(),
-                                                            center = pt
-                                                        )
-                                                        drawCircle(
-                                                            color = Color(0xFF38BDF8),
-                                                            radius = 2.4.dp.toPx(),
-                                                            center = pt
-                                                        )
-                                                        drawCircle(
-                                                            color = Color.White,
-                                                            radius = 1.2.dp.toPx(),
-                                                            center = pt
-                                                        )
+                                                    // B. 3D Geodesic Facial Topology Mesh (Wireframe + Micro-Nodes)
+                                                    if (showFacialMeshOverlay && obj.facialLandmarks.isNotEmpty()) {
+                                                        val landmarkPx = obj.facialLandmarks.map { pt ->
+                                                            Offset(pt.x * wPx, pt.y * hPx)
+                                                        }
+
+                                                        // Wireframe dual-glow edges
+                                                        for (edge in obj.facialMeshEdges) {
+                                                            if (edge.first < landmarkPx.size && edge.second < landmarkPx.size) {
+                                                                val p1 = landmarkPx[edge.first]
+                                                                val p2 = landmarkPx[edge.second]
+                                                                // Soft Cyan Glow Halo
+                                                                drawLine(
+                                                                    color = Color(0xFF06B6D4).copy(alpha = 0.50f),
+                                                                    start = p1,
+                                                                    end = p2,
+                                                                    strokeWidth = 2.8.dp.toPx()
+                                                                )
+                                                                // Core Brilliant White-Cyan Line
+                                                                drawLine(
+                                                                    color = Color(0xFFF0F9FF).copy(alpha = 0.95f),
+                                                                    start = p1,
+                                                                    end = p2,
+                                                                    strokeWidth = 1.3.dp.toPx()
+                                                                )
+                                                            }
+                                                        }
+
+                                                        // Glowing biometric node vertices
+                                                        for (pt in landmarkPx) {
+                                                            drawCircle(
+                                                                color = Color(0xFF06B6D4).copy(alpha = 0.55f),
+                                                                radius = 4.5.dp.toPx(),
+                                                                center = pt
+                                                            )
+                                                            drawCircle(
+                                                                color = Color(0xFF38BDF8),
+                                                                radius = 2.4.dp.toPx(),
+                                                                center = pt
+                                                            )
+                                                            drawCircle(
+                                                                color = Color.White,
+                                                                radius = 1.2.dp.toPx(),
+                                                                center = pt
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
-                                        detected.forEachIndexed { idx, obj ->
-                                            val isSelected = selectedHighlightIndex == idx
-                                            val baseColor = if (detectionMode == ObjectDetectionMode.SINGLE_OBJECT) {
-                                                Color(0xFF10B981) // High-contrast Emerald for Single Object
-                                            } else {
-                                                objectColors[idx % objectColors.size]
-                                            }
-                                            val activeColor = if (isSelected) Color(0xFFFBBF24) else baseColor
 
-                                            val leftDp = renderedW * obj.boxLeftNorm
-                                            val topDp = renderedH * obj.boxTopNorm
-                                            val itemWidth = (renderedW * (obj.boxRightNorm - obj.boxLeftNorm)).coerceAtLeast(36.dp)
-                                            val itemHeight = (renderedH * (obj.boxBottomNorm - obj.boxTopNorm)).coerceAtLeast(36.dp)
-
-                                            val isNearTop = topDp < 22.dp
-
-                                            Box(
-                                                modifier = Modifier
-                                                    .absoluteOffset(x = leftDp, y = topDp)
-                                                    .size(width = itemWidth, height = itemHeight)
-                                                    .clickable {
-                                                        selectedHighlightIndex = if (selectedHighlightIndex == idx) null else idx
-                                                    }
-                                                    .border(
-                                                        width = if (isSelected) 2.5.dp else 1.5.dp,
-                                                        color = activeColor.copy(alpha = if (isSelected) 0.95f else 0.75f),
-                                                        shape = RoundedCornerShape(4.dp)
-                                                    )
-                                                    .background(activeColor.copy(alpha = if (isSelected) 0.22f else 0.12f), RoundedCornerShape(4.dp))
-                                            ) {
-                                                // High-Tech Reticle Canvas: 4 Corner Brackets + Center Target Reticle & Pinpoint
-                                                Canvas(modifier = Modifier.fillMaxSize()) {
-                                                    val strokeW = if (isSelected) 3.dp.toPx() else 2.dp.toPx()
-                                                    val bracketLen = (8.dp.toPx()).coerceAtMost(size.minDimension / 4f)
-
-                                                    // 1. Top-Left Bracket
-                                                    drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(bracketLen, 0f), strokeWidth = strokeW)
-                                                    drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(0f, bracketLen), strokeWidth = strokeW)
-
-                                                    // 2. Top-Right Bracket
-                                                    drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width - bracketLen, 0f), strokeWidth = strokeW)
-                                                    drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width, bracketLen), strokeWidth = strokeW)
-
-                                                    // 3. Bottom-Left Bracket
-                                                    drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(bracketLen, size.height), strokeWidth = strokeW)
-                                                    drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(0f, size.height - bracketLen), strokeWidth = strokeW)
-
-                                                    // 4. Bottom-Right Bracket
-                                                    drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width - bracketLen, size.height), strokeWidth = strokeW)
-                                                    drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width, size.height - bracketLen), strokeWidth = strokeW)
-
-                                                    // Center Target Crosshair & Pinpoint Reticle
-                                                    val cx = size.width / 2f
-                                                    val cy = size.height / 2f
-                                                    val ringRad = 7.dp.toPx().coerceAtMost(size.minDimension / 5f)
-                                                    val tickLen = 4.dp.toPx()
-
-                                                    // Outer target circle
-                                                    drawCircle(
-                                                        color = activeColor.copy(alpha = 0.9f),
-                                                        radius = ringRad,
-                                                        center = Offset(cx, cy),
-                                                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
-                                                    )
-
-                                                    // 4 Crosshair ticks
-                                                    drawLine(color = activeColor, start = Offset(cx - ringRad - tickLen, cy), end = Offset(cx - ringRad + 1f, cy), strokeWidth = 1.5.dp.toPx())
-                                                    drawLine(color = activeColor, start = Offset(cx + ringRad - 1f, cy), end = Offset(cx + ringRad + tickLen, cy), strokeWidth = 1.5.dp.toPx())
-                                                    drawLine(color = activeColor, start = Offset(cx, cy - ringRad - tickLen), end = Offset(cx, cy - ringRad + 1f), strokeWidth = 1.5.dp.toPx())
-                                                    drawLine(color = activeColor, start = Offset(cx, cy + ringRad - 1f), end = Offset(cx, cy + ringRad + tickLen), strokeWidth = 1.5.dp.toPx())
-
-                                                    // Center pinpoint
-                                                    drawCircle(color = Color.White, radius = 2.5.dp.toPx(), center = Offset(cx, cy))
-                                                    drawCircle(color = activeColor, radius = 1.2.dp.toPx(), center = Offset(cx, cy))
+                                        if (showBoundingBoxOverlay) {
+                                            detected.forEachIndexed { idx, obj ->
+                                                val isSelected = selectedHighlightIndex == idx
+                                                val baseColor = if (detectionMode == ObjectDetectionMode.SINGLE_OBJECT) {
+                                                    Color(0xFF10B981) // High-contrast Emerald for Single Object
+                                                } else {
+                                                    objectColors[idx % objectColors.size]
                                                 }
+                                                val activeColor = if (isSelected) Color(0xFFFBBF24) else baseColor
 
-                                                // Top Label Pill Badge
-                                                Surface(
+                                                val leftDp = renderedW * obj.boxLeftNorm
+                                                val topDp = renderedH * obj.boxTopNorm
+                                                val itemWidth = (renderedW * (obj.boxRightNorm - obj.boxLeftNorm)).coerceAtLeast(36.dp)
+                                                val itemHeight = (renderedH * (obj.boxBottomNorm - obj.boxTopNorm)).coerceAtLeast(36.dp)
+
+                                                val isNearTop = topDp < 22.dp
+
+                                                Box(
                                                     modifier = Modifier
-                                                        .align(if (isNearTop) Alignment.BottomStart else Alignment.TopStart)
-                                                        .padding(3.dp),
-                                                    color = activeColor,
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    shadowElevation = 3.dp
+                                                        .absoluteOffset(x = leftDp, y = topDp)
+                                                        .size(width = itemWidth, height = itemHeight)
+                                                        .clickable {
+                                                            selectedHighlightIndex = if (selectedHighlightIndex == idx) null else idx
+                                                        }
+                                                        .border(
+                                                            width = if (isSelected) 2.5.dp else 1.5.dp,
+                                                            color = activeColor.copy(alpha = if (isSelected) 0.95f else 0.75f),
+                                                            shape = RoundedCornerShape(4.dp)
+                                                        )
+                                                        .background(activeColor.copy(alpha = if (isSelected) 0.22f else 0.12f), RoundedCornerShape(4.dp))
                                                 ) {
-                                                    Text(
-                                                        text = if (detectionMode == ObjectDetectionMode.SINGLE_OBJECT) {
-                                                            "🎯 ${obj.classLabel} (${String.format(Locale.US, "%.0f%%", obj.confidence * 100)})"
-                                                        } else {
-                                                            "#${idx + 1}: ${obj.classLabel} (${String.format(Locale.US, "%.0f%%", obj.confidence * 100)})"
-                                                        },
-                                                        style = MaterialTheme.typography.labelSmall.copy(
-                                                            fontSize = 9.5.sp,
-                                                            fontWeight = FontWeight.Bold
-                                                        ),
-                                                        color = Color.White,
-                                                        maxLines = 1,
-                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                                    )
-                                                }
+                                                    // High-Tech Reticle Canvas: 4 Corner Brackets + Center Target Reticle & Pinpoint
+                                                    Canvas(modifier = Modifier.fillMaxSize()) {
+                                                        val strokeW = if (isSelected) 3.dp.toPx() else 2.dp.toPx()
+                                                        val bracketLen = (8.dp.toPx()).coerceAtMost(size.minDimension / 4f)
 
-                                                // Stature & Physical Form Diagnostics Badge
-                                                if (obj.statureDiagnostics.isNotBlank()) {
+                                                        // 1. Top-Left Bracket
+                                                        drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(bracketLen, 0f), strokeWidth = strokeW)
+                                                        drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(0f, bracketLen), strokeWidth = strokeW)
+
+                                                        // 2. Top-Right Bracket
+                                                        drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width - bracketLen, 0f), strokeWidth = strokeW)
+                                                        drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width, bracketLen), strokeWidth = strokeW)
+
+                                                        // 3. Bottom-Left Bracket
+                                                        drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(bracketLen, size.height), strokeWidth = strokeW)
+                                                        drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(0f, size.height - bracketLen), strokeWidth = strokeW)
+
+                                                        // 4. Bottom-Right Bracket
+                                                        drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width - bracketLen, size.height), strokeWidth = strokeW)
+                                                        drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width, size.height - bracketLen), strokeWidth = strokeW)
+
+                                                        // Center Target Crosshair & Pinpoint Reticle
+                                                        val cx = size.width / 2f
+                                                        val cy = size.height / 2f
+                                                        val ringRad = 7.dp.toPx().coerceAtMost(size.minDimension / 5f)
+                                                        val tickLen = 4.dp.toPx()
+
+                                                        // Outer target circle
+                                                        drawCircle(
+                                                            color = activeColor.copy(alpha = 0.9f),
+                                                            radius = ringRad,
+                                                            center = Offset(cx, cy),
+                                                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
+                                                        )
+
+                                                        // 4 Crosshair ticks
+                                                        drawLine(color = activeColor, start = Offset(cx - ringRad - tickLen, cy), end = Offset(cx - ringRad + 1f, cy), strokeWidth = 1.5.dp.toPx())
+                                                        drawLine(color = activeColor, start = Offset(cx + ringRad - 1f, cy), end = Offset(cx + ringRad + tickLen, cy), strokeWidth = 1.5.dp.toPx())
+                                                        drawLine(color = activeColor, start = Offset(cx, cy - ringRad - tickLen), end = Offset(cx, cy - ringRad + 1f), strokeWidth = 1.5.dp.toPx())
+                                                        drawLine(color = activeColor, start = Offset(cx, cy + ringRad - 1f), end = Offset(cx, cy + ringRad + tickLen), strokeWidth = 1.5.dp.toPx())
+
+                                                        // Center pinpoint
+                                                        drawCircle(color = Color.White, radius = 2.5.dp.toPx(), center = Offset(cx, cy))
+                                                        drawCircle(color = activeColor, radius = 1.2.dp.toPx(), center = Offset(cx, cy))
+                                                    }
+
+                                                    // Top Label Pill Badge
                                                     Surface(
                                                         modifier = Modifier
-                                                            .align(if (isNearTop) Alignment.TopStart else Alignment.BottomStart)
+                                                            .align(if (isNearTop) Alignment.BottomStart else Alignment.TopStart)
                                                             .padding(3.dp),
-                                                        color = Color(0xFF0F172A).copy(alpha = 0.90f),
-                                                        shape = RoundedCornerShape(3.dp),
-                                                        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFFF59E0B).copy(alpha = 0.7f))
+                                                        color = activeColor,
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        shadowElevation = 3.dp
                                                     ) {
                                                         Text(
-                                                            text = "📐 ${obj.statureDiagnostics}",
+                                                            text = if (detectionMode == ObjectDetectionMode.SINGLE_OBJECT) {
+                                                                "🎯 ${obj.classLabel} (${String.format(Locale.US, "%.0f%%", obj.confidence * 100)})"
+                                                            } else {
+                                                                "#${idx + 1}: ${obj.classLabel} (${String.format(Locale.US, "%.0f%%", obj.confidence * 100)})"
+                                                            },
                                                             style = MaterialTheme.typography.labelSmall.copy(
-                                                                fontSize = 8.5.sp,
-                                                                fontWeight = FontWeight.Medium
+                                                                fontSize = 9.5.sp,
+                                                                fontWeight = FontWeight.Bold
                                                             ),
-                                                            color = Color(0xFFFDE68A),
+                                                            color = Color.White,
                                                             maxLines = 1,
-                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp)
+                                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                                         )
+                                                    }
+
+                                                    // Stature & Physical Form Diagnostics Badge
+                                                    if (obj.statureDiagnostics.isNotBlank()) {
+                                                        Surface(
+                                                            modifier = Modifier
+                                                                .align(if (isNearTop) Alignment.TopStart else Alignment.BottomStart)
+                                                                .padding(3.dp),
+                                                            color = Color(0xFF0F172A).copy(alpha = 0.90f),
+                                                            shape = RoundedCornerShape(3.dp),
+                                                            border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFFF59E0B).copy(alpha = 0.7f))
+                                                        ) {
+                                                            Text(
+                                                                text = "📐 ${obj.statureDiagnostics}",
+                                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                                    fontSize = 8.5.sp,
+                                                                    fontWeight = FontWeight.Medium
+                                                                ),
+                                                                color = Color(0xFFFDE68A),
+                                                                maxLines = 1,
+                                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp)
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }

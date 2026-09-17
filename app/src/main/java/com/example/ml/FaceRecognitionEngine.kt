@@ -634,14 +634,16 @@ class FaceRecognitionEngine(private val context: Context) {
             val faceEmb = extractFaceEmbedding(sceneBitmap, faceBox)
             val patchEmb = extractMultiPatchEmbedding(sceneBitmap, faceBox)
 
+            var matchedBodyBox: FaceBoundingBox? = null
             // Check if this face is inside one of the detected body boxes to link them
             for ((bIdx, bBox) in bodies.withIndex()) {
                 val faceMidX = (faceBox.leftNorm + faceBox.rightNorm) * 0.5f
                 val faceMidY = (faceBox.topNorm + faceBox.bottomNorm) * 0.5f
-                if (faceMidX in (bBox.leftNorm - 0.05f)..(bBox.rightNorm + 0.05f) &&
-                    faceMidY in (bBox.topNorm - 0.05f)..(bBox.bottomNorm + 0.10f)
+                if (faceMidX in (bBox.leftNorm - 0.08f)..(bBox.rightNorm + 0.08f) &&
+                    faceMidY in (bBox.topNorm - 0.08f)..(bBox.bottomNorm + 0.15f)
                 ) {
                     processedBodyIndices.add(bIdx)
+                    matchedBodyBox = bBox
                 }
             }
 
@@ -699,14 +701,27 @@ class FaceRecognitionEngine(private val context: Context) {
                 "Unknown Person"
             }
 
+            // Frame the full human body/stature bounding box around the detected person
+            val personBoundingBox = if (matchedBodyBox != null) {
+                matchedBodyBox
+            } else {
+                val faceW = faceBox.rightNorm - faceBox.leftNorm
+                val faceH = faceBox.bottomNorm - faceBox.topNorm
+                val pLeft = (faceBox.leftNorm - faceW * 0.55f).coerceIn(0f, 1f)
+                val pRight = (faceBox.rightNorm + faceW * 0.55f).coerceIn(0f, 1f)
+                val pTop = (faceBox.topNorm - faceH * 0.18f).coerceIn(0f, 1f)
+                val pBottom = (faceBox.bottomNorm + faceH * 2.8f).coerceIn(0f, 1f)
+                FaceBoundingBox(pLeft, pTop, pRight, pBottom)
+            }
+
             val (landmarks, edges) = generateFacialMeshAndLandmarks(faceBox)
-            val (contour, diag) = generateBodySilhouetteContour(faceBox, isFaceOnly = true)
+            val (contour, diag) = generateBodySilhouetteContour(personBoundingBox, isFaceOnly = false)
 
             results.add(
                 IdentifiedPerson(
                     personName = name,
                     confidence = confidence,
-                    boundingBox = faceBox,
+                    boundingBox = personBoundingBox,
                     personId = if (isRecognized) (bestPerson?.id ?: -1L) else -1L,
                     matchType = bestMatchType,
                     facialLandmarks = landmarks,
