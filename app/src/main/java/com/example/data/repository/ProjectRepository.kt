@@ -299,6 +299,14 @@ class ProjectRepository(
         dao.deleteSampleById(sampleId)
     }
 
+    suspend fun updateSampleClass(sampleId: Long, newClassId: Long) = withContext(Dispatchers.IO) {
+        dao.updateSampleClass(sampleId, newClassId)
+    }
+
+    suspend fun moveSamplesBatch(sampleIds: List<Long>, newClassId: Long) = withContext(Dispatchers.IO) {
+        dao.updateSamplesBatchClass(sampleIds, newClassId)
+    }
+
     suspend fun updateProjectHyperparameters(
         projectId: Long,
         epochs: Int,
@@ -1148,6 +1156,11 @@ class ProjectRepository(
             // Check for faces first (Selfies, Close-ups, Portraits)
             val faceEngine = FaceRecognitionEngine(context)
             val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = if (isMultiObject) 4 else 1)
+            val (faceLandmarks, faceEdges) = if (detectedFaces.isNotEmpty()) {
+                faceEngine.generateFacialMeshAndLandmarks(detectedFaces.first())
+            } else {
+                Pair(emptyList(), emptyList())
+            }
             faceEngine.close()
 
             val tfliteDetector = getTFLiteDetector()
@@ -1189,6 +1202,11 @@ class ProjectRepository(
                     } catch (_: Throwable) {}
                 }
 
+                val helperEngine = FaceRecognitionEngine(context)
+                val (fLandmarks, fEdges) = helperEngine.generateFacialMeshAndLandmarks(faceBox)
+                val (fContour, fDiag) = helperEngine.generateBodySilhouetteContour(faceBox, isFaceOnly = true)
+                helperEngine.close()
+
                 candidateRegions.add(
                     DetectedObjectRegion(
                         classIndex = predIdx,
@@ -1198,7 +1216,12 @@ class ProjectRepository(
                         boxTopNorm = faceBox.topNorm,
                         boxRightNorm = faceBox.rightNorm,
                         boxBottomNorm = faceBox.bottomNorm,
-                        regionTitle = predLabel
+                        regionTitle = predLabel,
+                        facialLandmarks = fLandmarks,
+                        facialMeshEdges = fEdges,
+                        bodyContourPoints = fContour,
+                        statureDiagnostics = fDiag,
+                        statureRatio = if ((faceBox.rightNorm - faceBox.leftNorm) > 0.01f) (faceBox.bottomNorm - faceBox.topNorm) / (faceBox.rightNorm - faceBox.leftNorm) else 1.3f
                     )
                 )
             }
@@ -1280,6 +1303,19 @@ class ProjectRepository(
                     }
 
                     if (!overlapsWithFace || !isDetPerson) {
+                        var bContour = emptyList<BiometricPoint>()
+                        var bDiag = ""
+                        var bRatio = 0f
+                        if (isDetPerson) {
+                            val helperEngine = FaceRecognitionEngine(context)
+                            val bBox = FaceBoundingBox(boxL, boxT, boxR, boxB, predConf)
+                            val (cPoints, cDiag) = helperEngine.generateBodySilhouetteContour(bBox, isFaceOnly = false)
+                            helperEngine.close()
+                            bContour = cPoints
+                            bDiag = cDiag
+                            bRatio = if ((boxR - boxL) > 0.01f) (boxB - boxT) / (boxR - boxL) else 1.5f
+                        }
+
                         candidateRegions.add(
                             DetectedObjectRegion(
                                 classIndex = predIdx,
@@ -1289,7 +1325,10 @@ class ProjectRepository(
                                 boxTopNorm = boxT,
                                 boxRightNorm = boxR,
                                 boxBottomNorm = boxB,
-                                regionTitle = predLabel
+                                regionTitle = predLabel,
+                                bodyContourPoints = bContour,
+                                statureDiagnostics = bDiag,
+                                statureRatio = bRatio
                             )
                         )
                     }

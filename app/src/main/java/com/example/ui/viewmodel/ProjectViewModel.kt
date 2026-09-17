@@ -404,6 +404,26 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun updateSampleClass(sampleId: Long, newClassId: Long) {
+        viewModelScope.launch {
+            repository.updateSampleClass(sampleId, newClassId)
+        }
+    }
+
+    fun moveSamplesBatch(sampleIds: List<Long>, newClassId: Long) {
+        viewModelScope.launch {
+            repository.moveSamplesBatch(sampleIds, newClassId)
+        }
+    }
+
+    fun deleteSamplesBatch(sampleIds: List<Long>) {
+        viewModelScope.launch {
+            sampleIds.forEach { id ->
+                repository.deleteSample(id)
+            }
+        }
+    }
+
     fun getSamplesForClass(classId: Long): Flow<List<ImageSampleEntity>> {
         return repository.getSamplesForClass(classId)
     }

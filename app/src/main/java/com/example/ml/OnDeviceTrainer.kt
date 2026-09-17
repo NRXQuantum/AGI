@@ -43,6 +43,11 @@ data class TrainingProgress(
     val speedText: String = ""
 )
 
+data class BiometricPoint(
+    val x: Float,
+    val y: Float
+)
+
 data class DetectedObjectRegion(
     val classIndex: Int,
     val classLabel: String,
@@ -51,7 +56,12 @@ data class DetectedObjectRegion(
     val boxTopNorm: Float,     // 0.0f - 1.0f relative to image height
     val boxRightNorm: Float,   // 0.0f - 1.0f relative to image width
     val boxBottomNorm: Float,  // 0.0f - 1.0f relative to image height
-    val regionTitle: String
+    val regionTitle: String,
+    val facialLandmarks: List<BiometricPoint> = emptyList(),
+    val facialMeshEdges: List<Pair<Int, Int>> = emptyList(),
+    val bodyContourPoints: List<BiometricPoint> = emptyList(),
+    val statureDiagnostics: String = "",
+    val statureRatio: Float = 0f
 )
 
 data class PredictionResult(

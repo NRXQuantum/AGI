@@ -52,6 +52,15 @@ interface ProjectDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSample(sample: ImageSampleEntity): Long
 
+    @Update
+    suspend fun updateSample(sample: ImageSampleEntity)
+
+    @Query("UPDATE image_samples SET classId = :newClassId WHERE id = :sampleId")
+    suspend fun updateSampleClass(sampleId: Long, newClassId: Long)
+
+    @Query("UPDATE image_samples SET classId = :newClassId WHERE id IN (:sampleIds)")
+    suspend fun updateSamplesBatchClass(sampleIds: List<Long>, newClassId: Long)
+
     @Delete
     suspend fun deleteSample(sample: ImageSampleEntity)
 

@@ -57,7 +57,12 @@ data class LiveDetectedBox(
     val rightNorm: Float,
     val bottomNorm: Float,
     val color: Color = Color(0xFF38BDF8),
-    val trackId: Int = 0
+    val trackId: Int = 0,
+    val facialLandmarks: List<com.example.ml.BiometricPoint> = emptyList(),
+    val facialMeshEdges: List<Pair<Int, Int>> = emptyList(),
+    val bodyContourPoints: List<com.example.ml.BiometricPoint> = emptyList(),
+    val statureDiagnostics: String = "",
+    val statureRatio: Float = 0f
 )
 
 data class LiveSinglePrediction(
@@ -894,7 +899,61 @@ private fun SmoothTrackedBox(
             style = Stroke(width = 1.5f)
         )
 
-        // 3. CCTV / OpenCV 4-Corner Reinforced Precision Brackets
+        // 3. Structural Body Silhouette Contour (Boundary Tracing)
+        if (box.bodyContourPoints.isNotEmpty()) {
+            val contourPath = androidx.compose.ui.graphics.Path()
+            box.bodyContourPoints.forEachIndexed { idx, pt ->
+                val px = offsetX + pt.x * renderedW
+                val py = offsetY + pt.y * renderedH
+                if (idx == 0) {
+                    contourPath.moveTo(px, py)
+                } else {
+                    contourPath.lineTo(px, py)
+                }
+            }
+            contourPath.close()
+            drawPath(
+                path = contourPath,
+                color = Color(0xFFF59E0B).copy(alpha = 0.45f),
+                style = Stroke(width = 2f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(10f, 6f)))
+            )
+        }
+
+        // 4. Biometric Facial Landmark Topology Mesh
+        if (box.facialLandmarks.isNotEmpty()) {
+            val landmarkPx = box.facialLandmarks.map { pt ->
+                Offset(offsetX + pt.x * renderedW, offsetY + pt.y * renderedH)
+            }
+
+            // Draw wireframe edges
+            val meshColor = Color(0xFF06B6D4).copy(alpha = 0.55f)
+            for (edge in box.facialMeshEdges) {
+                if (edge.first < landmarkPx.size && edge.second < landmarkPx.size) {
+                    drawLine(
+                        color = meshColor,
+                        start = landmarkPx[edge.first],
+                        end = landmarkPx[edge.second],
+                        strokeWidth = 1.2f
+                    )
+                }
+            }
+
+            // Draw landmark vertices (glowing micro nodes)
+            for (pt in landmarkPx) {
+                drawCircle(
+                    color = Color(0xFF22D3EE).copy(alpha = 0.75f),
+                    radius = 2.5f,
+                    center = pt
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 1.2f,
+                    center = pt
+                )
+            }
+        }
+
+        // 5. CCTV / OpenCV 4-Corner Reinforced Precision Brackets
         val cornerLen = minOf(boxW, boxH) * 0.22f
         val cornerStroke = 3.5f
 
@@ -914,7 +973,7 @@ private fun SmoothTrackedBox(
         drawLine(box.color, Offset(right, bottom), Offset(right - cornerLen, bottom), cornerStroke)
         drawLine(box.color, Offset(right, bottom), Offset(right, bottom - cornerLen), cornerStroke)
 
-        // 4. Optical Center Crosshair (+)
+        // 6. Optical Center Crosshair (+)
         val centerX = left + boxW / 2f
         val centerY = top + boxH / 2f
         val chLen = 6f
@@ -926,36 +985,58 @@ private fun SmoothTrackedBox(
     val leftDp = with(density) { left.toDp() }
     val topDp = with(density) { top.toDp() }
 
-    val maxBadgeY = maxOf(68.dp, screenH - 120.dp)
+    val maxBadgeY = maxOf(68.dp, screenH - 140.dp)
     val badgeY = (if (topDp >= 80.dp) topDp - 28.dp else topDp + 6.dp).coerceIn(68.dp, maxBadgeY)
     val maxBadgeX = maxOf(12.dp, screenW - 140.dp)
     val badgeX = leftDp.coerceIn(12.dp, maxBadgeX)
 
-    Surface(
+    Column(
         modifier = Modifier
             .offset(x = badgeX, y = badgeY)
-            .clip(RoundedCornerShape(6.dp)),
-        color = box.color,
-        shadowElevation = 4.dp
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Surface(
+            modifier = Modifier.clip(RoundedCornerShape(6.dp)),
+            color = box.color,
+            shadowElevation = 4.dp
         ) {
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-            )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-                text = "${box.label} ${String.format(Locale.US, "%.1f%%", box.confidence * 100)}",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
                 )
-            )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = "${box.label} ${String.format(Locale.US, "%.1f%%", box.confidence * 100)}",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                )
+            }
+        }
+
+        if (box.statureDiagnostics.isNotBlank()) {
+            Spacer(modifier = Modifier.height(2.dp))
+            Surface(
+                modifier = Modifier.clip(RoundedCornerShape(4.dp)),
+                color = Color.Black.copy(alpha = 0.80f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, box.color.copy(alpha = 0.6f))
+            ) {
+                Text(
+                    text = box.statureDiagnostics,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White.copy(alpha = 0.9f)
+                    ),
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 }
