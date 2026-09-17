@@ -1035,9 +1035,84 @@ fun InferenceScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
 
-                                    // Display neat bounding boxes & target pointers for both Single and Multi-Object modes
+                                    // Display full biometric wireframe mesh, body contour, and precision target boxes
                                     if (inferenceResult != null) {
                                         val detected = inferenceResult!!.detectedObjects
+
+                                        // 1. Full-Resolution Biometric & Structural Contour Layer
+                                        Canvas(modifier = Modifier.fillMaxSize()) {
+                                            val wPx = size.width
+                                            val hPx = size.height
+
+                                            for ((idx, obj) in detected.withIndex()) {
+                                                // A. Structural Body / Stature Silhouette Contour
+                                                if (obj.bodyContourPoints.isNotEmpty()) {
+                                                    val contourPath = androidx.compose.ui.graphics.Path()
+                                                    obj.bodyContourPoints.forEachIndexed { cIdx, pt ->
+                                                        val px = pt.x * wPx
+                                                        val py = pt.y * hPx
+                                                        if (cIdx == 0) contourPath.moveTo(px, py) else contourPath.lineTo(px, py)
+                                                    }
+                                                    contourPath.close()
+                                                    drawPath(
+                                                        path = contourPath,
+                                                        color = Color(0xFFF59E0B).copy(alpha = 0.70f),
+                                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                            width = 2.dp.toPx(),
+                                                            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+                                                        )
+                                                    )
+                                                }
+
+                                                // B. 3D Geodesic Facial Topology Mesh (Wireframe + Micro-Nodes)
+                                                if (obj.facialLandmarks.isNotEmpty()) {
+                                                    val landmarkPx = obj.facialLandmarks.map { pt ->
+                                                        Offset(pt.x * wPx, pt.y * hPx)
+                                                    }
+
+                                                    // Wireframe dual-glow edges
+                                                    for (edge in obj.facialMeshEdges) {
+                                                        if (edge.first < landmarkPx.size && edge.second < landmarkPx.size) {
+                                                            val p1 = landmarkPx[edge.first]
+                                                            val p2 = landmarkPx[edge.second]
+                                                            // Soft Cyan Glow Halo
+                                                            drawLine(
+                                                                color = Color(0xFF06B6D4).copy(alpha = 0.50f),
+                                                                start = p1,
+                                                                end = p2,
+                                                                strokeWidth = 2.8.dp.toPx()
+                                                            )
+                                                            // Core Brilliant White-Cyan Line
+                                                            drawLine(
+                                                                color = Color(0xFFF0F9FF).copy(alpha = 0.95f),
+                                                                start = p1,
+                                                                end = p2,
+                                                                strokeWidth = 1.3.dp.toPx()
+                                                             )
+                                                        }
+                                                    }
+
+                                                    // Glowing biometric node vertices
+                                                    for (pt in landmarkPx) {
+                                                        drawCircle(
+                                                            color = Color(0xFF06B6D4).copy(alpha = 0.55f),
+                                                            radius = 4.5.dp.toPx(),
+                                                            center = pt
+                                                        )
+                                                        drawCircle(
+                                                            color = Color(0xFF38BDF8),
+                                                            radius = 2.4.dp.toPx(),
+                                                            center = pt
+                                                        )
+                                                        drawCircle(
+                                                            color = Color.White,
+                                                            radius = 1.2.dp.toPx(),
+                                                            center = pt
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                         detected.forEachIndexed { idx, obj ->
                                             val isSelected = selectedHighlightIndex == idx
                                             val baseColor = if (detectionMode == ObjectDetectionMode.SINGLE_OBJECT) {
@@ -1137,6 +1212,29 @@ fun InferenceScreen(
                                                         maxLines = 1,
                                                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                                     )
+                                                }
+
+                                                // Stature & Physical Form Diagnostics Badge
+                                                if (obj.statureDiagnostics.isNotBlank()) {
+                                                    Surface(
+                                                        modifier = Modifier
+                                                            .align(if (isNearTop) Alignment.TopStart else Alignment.BottomStart)
+                                                            .padding(3.dp),
+                                                        color = Color(0xFF0F172A).copy(alpha = 0.90f),
+                                                        shape = RoundedCornerShape(3.dp),
+                                                        border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFFF59E0B).copy(alpha = 0.7f))
+                                                    ) {
+                                                        Text(
+                                                            text = "📐 ${obj.statureDiagnostics}",
+                                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                                fontSize = 8.5.sp,
+                                                                fontWeight = FontWeight.Medium
+                                                            ),
+                                                            color = Color(0xFFFDE68A),
+                                                            maxLines = 1,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp)
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -2593,7 +2691,12 @@ fun InferenceScreen(
                         leftNorm = obj.boxLeftNorm,
                         topNorm = obj.boxTopNorm,
                         rightNorm = obj.boxRightNorm,
-                        bottomNorm = obj.boxBottomNorm
+                        bottomNorm = obj.boxBottomNorm,
+                        facialLandmarks = obj.facialLandmarks,
+                        facialMeshEdges = obj.facialMeshEdges,
+                        bodyContourPoints = obj.bodyContourPoints,
+                        statureDiagnostics = obj.statureDiagnostics,
+                        statureRatio = obj.statureRatio
                     )
                 } ?: emptyList()
                 Pair(single, multiBoxes)

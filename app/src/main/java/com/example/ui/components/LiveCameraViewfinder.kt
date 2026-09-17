@@ -919,21 +919,30 @@ private fun SmoothTrackedBox(
             )
         }
 
-        // 4. Biometric Facial Landmark Topology Mesh
+        // 4. Biometric Facial Landmark 3D Geodesic Topology Mesh (Wireframe + Micro-Nodes)
         if (box.facialLandmarks.isNotEmpty()) {
             val landmarkPx = box.facialLandmarks.map { pt ->
                 Offset(offsetX + pt.x * renderedW, offsetY + pt.y * renderedH)
             }
 
-            // Draw wireframe edges
-            val meshColor = Color(0xFF06B6D4).copy(alpha = 0.55f)
+            // Draw wireframe edges with high-contrast dual-tone glow
             for (edge in box.facialMeshEdges) {
                 if (edge.first < landmarkPx.size && edge.second < landmarkPx.size) {
+                    val p1 = landmarkPx[edge.first]
+                    val p2 = landmarkPx[edge.second]
+                    // Glow halo
                     drawLine(
-                        color = meshColor,
-                        start = landmarkPx[edge.first],
-                        end = landmarkPx[edge.second],
-                        strokeWidth = 1.2f
+                        color = Color(0xFF06B6D4).copy(alpha = 0.40f),
+                        start = p1,
+                        end = p2,
+                        strokeWidth = 2.6f
+                    )
+                    // Core wireframe line
+                    drawLine(
+                        color = Color(0xFFE0F2FE).copy(alpha = 0.88f),
+                        start = p1,
+                        end = p2,
+                        strokeWidth = 1.3f
                     )
                 }
             }
@@ -941,8 +950,13 @@ private fun SmoothTrackedBox(
             // Draw landmark vertices (glowing micro nodes)
             for (pt in landmarkPx) {
                 drawCircle(
-                    color = Color(0xFF22D3EE).copy(alpha = 0.75f),
-                    radius = 2.5f,
+                    color = Color(0xFF06B6D4).copy(alpha = 0.45f),
+                    radius = 4.2f,
+                    center = pt
+                )
+                drawCircle(
+                    color = Color(0xFF38BDF8),
+                    radius = 2.4f,
                     center = pt
                 )
                 drawCircle(

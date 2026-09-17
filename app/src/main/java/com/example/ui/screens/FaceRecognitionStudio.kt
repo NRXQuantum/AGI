@@ -720,7 +720,14 @@ fun FaceRecognitionStudio(
                             topNorm = face.boundingBox.topNorm,
                             rightNorm = face.boundingBox.rightNorm,
                             bottomNorm = face.boundingBox.bottomNorm,
-                            color = boxColor
+                            color = boxColor,
+                            facialLandmarks = face.facialLandmarks,
+                            facialMeshEdges = face.facialMeshEdges,
+                            bodyContourPoints = face.bodyContour,
+                            statureDiagnostics = face.statureDiagnostics,
+                            statureRatio = if (face.boundingBox.rightNorm - face.boundingBox.leftNorm > 0.01f) {
+                                (face.boundingBox.bottomNorm - face.boundingBox.topNorm) / (face.boundingBox.rightNorm - face.boundingBox.leftNorm)
+                            } else 1.5f
                         )
                     }
 

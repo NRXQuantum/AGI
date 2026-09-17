@@ -832,29 +832,50 @@ class FaceRecognitionEngine(private val context: Context) {
         points.add(BiometricPoint(l + w * 0.84f, t + h * 0.65f))
         points.add(BiometricPoint(l + w * 0.88f, t + h * 0.42f))
 
-        // Forehead Anchor (33)
-        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.08f))
+        // Forehead Apex (33), Left Upper Temple (34), Right Upper Temple (35)
+        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.08f)) // 33: Forehead Apex
+        points.add(BiometricPoint(l + w * 0.22f, t + h * 0.12f)) // 34: Left Temple
+        points.add(BiometricPoint(l + w * 0.78f, t + h * 0.12f)) // 35: Right Temple
 
-        // Wireframe mesh edges (index pairs)
+        // Cheeks: Left Zygomatic (36), Left Mid Cheek (37), Right Zygomatic (38), Right Mid Cheek (39)
+        points.add(BiometricPoint(l + w * 0.18f, t + h * 0.50f)) // 36: Left Zygomatic
+        points.add(BiometricPoint(l + w * 0.28f, t + h * 0.58f)) // 37: Left Mid Cheek
+        points.add(BiometricPoint(l + w * 0.82f, t + h * 0.50f)) // 38: Right Zygomatic
+        points.add(BiometricPoint(l + w * 0.72f, t + h * 0.58f)) // 39: Right Mid Cheek
+
+        // Wireframe 3D geodesic mesh edges (index pairs)
         val edges = listOf(
-            // Eyebrows
-            0 to 1, 1 to 2, 3 to 4, 4 to 5, 2 to 16, 3 to 16,
-            // Left eye
-            6 to 7, 7 to 8, 8 to 9, 9 to 6, 6 to 10, 8 to 10,
-            // Right eye
-            11 to 12, 12 to 13, 13 to 14, 14 to 11, 11 to 15, 13 to 15,
-            // Nose
-            16 to 17, 17 to 18, 18 to 19, 18 to 20, 19 to 20,
-            // Lips
-            21 to 22, 22 to 23, 23 to 24, 24 to 21, 21 to 25, 23 to 25,
-            // Eye to Nose Triangulation
-            8 to 16, 11 to 16, 8 to 17, 11 to 17, 19 to 21, 20 to 23,
-            // Jawline
+            // Forehead & Temple Triangulation (like in futuristic biometric scanners)
+            33 to 34, 33 to 35, 33 to 1, 33 to 4, 33 to 16,
+            34 to 0, 34 to 1, 35 to 4, 35 to 5,
+
+            // Eyebrows & Brow Ridge
+            0 to 1, 1 to 2, 3 to 4, 4 to 5, 2 to 16, 3 to 16, 2 to 3,
+
+            // Left Eye
+            6 to 7, 7 to 8, 8 to 9, 9 to 6, 6 to 10, 8 to 10, 7 to 10, 9 to 10,
+            0 to 6, 1 to 7, 2 to 8,
+
+            // Right Eye
+            11 to 12, 12 to 13, 13 to 14, 14 to 11, 11 to 15, 13 to 15, 12 to 15, 14 to 15,
+            3 to 11, 4 to 12, 5 to 13,
+
+            // Nose Bridge & Triangle Facets
+            16 to 17, 17 to 18, 18 to 19, 18 to 20, 19 to 20, 17 to 19, 17 to 20,
+            8 to 16, 11 to 16, 8 to 17, 11 to 17, 9 to 17, 14 to 17,
+
+            // Cheeks Triangulation
+            6 to 36, 36 to 26, 36 to 37, 37 to 19, 37 to 21, 37 to 27, 37 to 28,
+            13 to 38, 38 to 32, 38 to 39, 39 to 20, 39 to 23, 39 to 31, 39 to 30,
+
+            // Philtrum & Mouth
+            19 to 21, 20 to 23, 18 to 22, 19 to 22, 20 to 22,
+            21 to 22, 22 to 23, 23 to 24, 24 to 21, 21 to 25, 23 to 25, 22 to 25, 24 to 25,
+
+            // Jawline & Chin
             26 to 27, 27 to 28, 28 to 29, 29 to 30, 30 to 31, 31 to 32,
-            // Forehead
-            33 to 1, 33 to 4, 33 to 16,
-            // Cheeks to Jaw Triangulation
-            26 to 6, 32 to 13, 28 to 21, 30 to 23, 29 to 24
+            28 to 24, 29 to 24, 30 to 24,
+            34 to 26, 35 to 32
         )
 
         return Pair(points, edges)

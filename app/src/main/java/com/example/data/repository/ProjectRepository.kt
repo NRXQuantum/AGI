@@ -759,6 +759,8 @@ class ProjectRepository(
                 val detectedRegions = mutableListOf<DetectedObjectRegion>()
                 if (faceBoxes.isNotEmpty()) {
                     for ((idx, box) in faceBoxes.withIndex()) {
+                        val (landmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(box)
+                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(box, isFaceOnly = true)
                         detectedRegions.add(
                             DetectedObjectRegion(
                                 classIndex = idx,
@@ -768,7 +770,12 @@ class ProjectRepository(
                                 boxTopNorm = box.topNorm,
                                 boxRightNorm = box.rightNorm,
                                 boxBottomNorm = box.bottomNorm,
-                                regionTitle = "Face #${idx + 1}"
+                                regionTitle = "Face #${idx + 1}",
+                                facialLandmarks = landmarks,
+                                facialMeshEdges = edges,
+                                bodyContourPoints = contour,
+                                statureDiagnostics = diag,
+                                statureRatio = if (box.rightNorm - box.leftNorm > 0.01f) (box.bottomNorm - box.topNorm) / (box.rightNorm - box.leftNorm) else 1.3f
                             )
                         )
                     }
@@ -813,7 +820,14 @@ class ProjectRepository(
                     boxTopNorm = person.boundingBox.topNorm,
                     boxRightNorm = person.boundingBox.rightNorm,
                     boxBottomNorm = person.boundingBox.bottomNorm,
-                    regionTitle = "${person.personName} (${person.matchType})"
+                    regionTitle = "${person.personName} (${person.matchType})",
+                    facialLandmarks = person.facialLandmarks,
+                    facialMeshEdges = person.facialMeshEdges,
+                    bodyContourPoints = person.bodyContour,
+                    statureDiagnostics = person.statureDiagnostics,
+                    statureRatio = if (person.boundingBox.rightNorm - person.boundingBox.leftNorm > 0.01f) {
+                        (person.boundingBox.bottomNorm - person.boundingBox.topNorm) / (person.boundingBox.rightNorm - person.boundingBox.leftNorm)
+                    } else 1.3f
                 )
             }
 
