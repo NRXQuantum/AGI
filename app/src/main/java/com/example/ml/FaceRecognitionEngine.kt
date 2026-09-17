@@ -711,27 +711,14 @@ class FaceRecognitionEngine(private val context: Context) {
                 "Unknown Person"
             }
 
-            // Frame the full human body/stature bounding box around the detected person
-            val personBoundingBox = if (matchedBodyBox != null) {
-                matchedBodyBox
-            } else {
-                val faceW = faceBox.rightNorm - faceBox.leftNorm
-                val faceH = faceBox.bottomNorm - faceBox.topNorm
-                val pLeft = (faceBox.leftNorm - faceW * 0.55f).coerceIn(0f, 1f)
-                val pRight = (faceBox.rightNorm + faceW * 0.55f).coerceIn(0f, 1f)
-                val pTop = (faceBox.topNorm - faceH * 0.18f).coerceIn(0f, 1f)
-                val pBottom = (faceBox.bottomNorm + faceH * 2.8f).coerceIn(0f, 1f)
-                FaceBoundingBox(pLeft, pTop, pRight, pBottom)
-            }
-
             val (landmarks, edges) = generateFacialMeshAndLandmarks(faceBox)
-            val (contour, diag) = generateBodySilhouetteContour(personBoundingBox, isFaceOnly = false)
+            val (contour, diag) = generateBodySilhouetteContour(faceBox, isFaceOnly = true)
 
             results.add(
                 IdentifiedPerson(
                     personName = name,
                     confidence = confidence,
-                    boundingBox = personBoundingBox,
+                    boundingBox = faceBox, // Head & Face box with corner reticle brackets matching the reference!
                     personId = if (isRecognized) (bestPerson?.id ?: -1L) else -1L,
                     matchType = bestMatchType,
                     facialLandmarks = landmarks,
@@ -797,9 +784,10 @@ class FaceRecognitionEngine(private val context: Context) {
     }
 
     /**
-     * Generates a dense 48-point biometric facial landmark topology mesh and wireframe edge connections
-     * with authentic anatomical precision: inner eye canthus to nasal bridge, nasion/dorsum ridge,
-     * alar wings, philtrum columns, cupids bow, mouth corners, zygomatic arches, and jawline.
+     * Generates an authentic 18-point 3D geometric facial polygon mesh (জাল) and Delaunay faceted wireframe
+     * matching high-tech CCTV biometric scanners and the exact reference aesthetic:
+     * - Outer polygonal silhouette: Forehead, temples, zygomatic cheekbones, jawline, chin
+     * - Inner biometric facets: Eyes to nose bridge, nose tip/nostrils, philtrum, mouth, and chin creases.
      */
     fun generateFacialMeshAndLandmarks(box: FaceBoundingBox): Pair<List<BiometricPoint>, List<Pair<Int, Int>>> {
         val l = box.leftNorm
@@ -809,127 +797,52 @@ class FaceRecognitionEngine(private val context: Context) {
         val w = (r - l).coerceAtLeast(0.01f)
         val h = (b - t).coerceAtLeast(0.01f)
 
-        // Determine authentic eye anchors: from detected biometric coordinates or anthropometric proportions
-        val eyeMidX = if (box.eyeMidXNorm > 0f) box.eyeMidXNorm else (l + w * 0.50f)
-        val eyeMidY = if (box.eyeMidYNorm > 0f) box.eyeMidYNorm else (t + h * 0.38f)
-        val eyeD = if (box.eyeDistanceNorm > 0f) box.eyeDistanceNorm else (w * 0.38f)
-
         val points = mutableListOf<BiometricPoint>()
 
-        // 0..4: Left Eye (Pupil, Inner Canthus, Outer Canthus, Upper Lid, Lower Lid)
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.50f, eyeMidY)) // 0: Left Pupil
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.20f, eyeMidY + eyeD * 0.02f)) // 1: Left Inner Canthus (connecting to nose)
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.78f, eyeMidY - eyeD * 0.02f)) // 2: Left Outer Canthus
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.50f, eyeMidY - eyeD * 0.14f)) // 3: Left Upper Lid
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.50f, eyeMidY + eyeD * 0.12f)) // 4: Left Lower Lid
+        // 0..9: Outer Polygonal Facial Silhouette Contour
+        points.add(BiometricPoint(l + w * 0.22f, t + h * 0.12f)) // 0: Forehead Left (under cap/hairline)
+        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.05f)) // 1: Forehead Apex / Center
+        points.add(BiometricPoint(l + w * 0.78f, t + h * 0.12f)) // 2: Forehead Right
+        points.add(BiometricPoint(l + w * 0.90f, t + h * 0.28f)) // 3: Right Temple
+        points.add(BiometricPoint(l + w * 0.92f, t + h * 0.54f)) // 4: Right Zygomatic / Cheekbone
+        points.add(BiometricPoint(l + w * 0.82f, t + h * 0.80f)) // 5: Right Lower Jaw (gonion)
+        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.98f)) // 6: Chin Apex (menton)
+        points.add(BiometricPoint(l + w * 0.18f, t + h * 0.80f)) // 7: Left Lower Jaw (gonion)
+        points.add(BiometricPoint(l + w * 0.08f, t + h * 0.54f)) // 8: Left Zygomatic / Cheekbone
+        points.add(BiometricPoint(l + w * 0.10f, t + h * 0.28f)) // 9: Left Temple
 
-        // 5..9: Right Eye (Pupil, Inner Canthus, Outer Canthus, Upper Lid, Lower Lid)
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.50f, eyeMidY)) // 5: Right Pupil
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.20f, eyeMidY + eyeD * 0.02f)) // 6: Right Inner Canthus (connecting to nose)
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.78f, eyeMidY - eyeD * 0.02f)) // 7: Right Outer Canthus
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.50f, eyeMidY - eyeD * 0.14f)) // 8: Right Upper Lid
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.50f, eyeMidY + eyeD * 0.12f)) // 9: Right Lower Lid
+        // 10..17: Internal 3D Biometric Facial Topology Facets
+        points.add(BiometricPoint(l + w * 0.28f, t + h * 0.36f)) // 10: Left Eye / Brow Ridge
+        points.add(BiometricPoint(l + w * 0.72f, t + h * 0.36f)) // 11: Right Eye / Brow Ridge
+        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.38f)) // 12: Nose Bridge / Nasion (between eyes)
+        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.62f)) // 13: Nose Tip (pronasale)
+        points.add(BiometricPoint(l + w * 0.38f, t + h * 0.62f)) // 14: Left Nostril / Alar Wing
+        points.add(BiometricPoint(l + w * 0.62f, t + h * 0.62f)) // 15: Right Nostril / Alar Wing
+        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.76f)) // 16: Mouth Center / Vermilion
+        points.add(BiometricPoint(l + w * 0.50f, t + h * 0.88f)) // 17: Chin Crease / Sublabial
 
-        // 10..12: Left Eyebrow (Inner, Arch, Outer Tail)
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.18f, eyeMidY - eyeD * 0.38f)) // 10: Left Brow Inner
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.52f, eyeMidY - eyeD * 0.48f)) // 11: Left Brow Arch
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.85f, eyeMidY - eyeD * 0.30f)) // 12: Left Brow Tail
-
-        // 13..15: Right Eyebrow (Inner, Arch, Outer Tail)
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.18f, eyeMidY - eyeD * 0.38f)) // 13: Right Brow Inner
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.52f, eyeMidY - eyeD * 0.48f)) // 14: Right Brow Arch
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.85f, eyeMidY - eyeD * 0.30f)) // 15: Right Brow Tail
-
-        // 16..24: Nose Anatomy & Bridge System
-        points.add(BiometricPoint(eyeMidX, eyeMidY - eyeD * 0.35f)) // 16: Glabella (Between Brows)
-        points.add(BiometricPoint(eyeMidX, eyeMidY - eyeD * 0.02f)) // 17: Nasion (Nose Root between Eyes)
-        points.add(BiometricPoint(eyeMidX, eyeMidY + eyeD * 0.40f)) // 18: Rhinion (Mid Nasal Dorsum Bridge)
-        points.add(BiometricPoint(eyeMidX, eyeMidY + eyeD * 0.75f)) // 19: Pronasale (Nose Tip)
-        points.add(BiometricPoint(eyeMidX, eyeMidY + eyeD * 0.95f)) // 20: Subnasale (Nose Base / Columella)
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.30f, eyeMidY + eyeD * 0.72f)) // 21: Left Alar Wing / Nostril
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.30f, eyeMidY + eyeD * 0.72f)) // 22: Right Alar Wing / Nostril
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.22f, eyeMidY + eyeD * 0.92f)) // 23: Left Nasal Crease
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.22f, eyeMidY + eyeD * 0.92f)) // 24: Right Nasal Crease
-
-        // 25..31: Lips & Philtrum
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.12f, eyeMidY + eyeD * 1.10f)) // 25: Left Philtrum Pillar
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.12f, eyeMidY + eyeD * 1.10f)) // 26: Right Philtrum Pillar
-        points.add(BiometricPoint(eyeMidX, eyeMidY + eyeD * 1.25f)) // 27: Upper Lip Cupid's Bow Center
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.46f, eyeMidY + eyeD * 1.35f)) // 28: Left Mouth Corner
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.46f, eyeMidY + eyeD * 1.35f)) // 29: Right Mouth Corner
-        points.add(BiometricPoint(eyeMidX, eyeMidY + eyeD * 1.55f)) // 30: Lower Lip Vermilion
-        points.add(BiometricPoint(eyeMidX, eyeMidY + eyeD * 1.35f)) // 31: Oral Fissure Center
-
-        // 32..37: Cheeks & Infraorbital Region
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.35f, eyeMidY + eyeD * 0.28f)) // 32: Left Infraorbital (Tear Trough)
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.35f, eyeMidY + eyeD * 0.28f)) // 33: Right Infraorbital (Tear Trough)
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.92f, eyeMidY + eyeD * 0.40f)) // 34: Left Zygomatic (Cheekbone)
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.92f, eyeMidY + eyeD * 0.40f)) // 35: Right Zygomatic (Cheekbone)
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.65f, eyeMidY + eyeD * 0.85f)) // 36: Left Buccal / Mid Cheek
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.65f, eyeMidY + eyeD * 0.85f)) // 37: Right Buccal / Mid Cheek
-
-        // 38..42: Forehead & Temples
-        points.add(BiometricPoint(eyeMidX, eyeMidY - eyeD * 0.90f)) // 38: Forehead Apex
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.50f, eyeMidY - eyeD * 0.82f)) // 39: Left Forehead Boss
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.50f, eyeMidY - eyeD * 0.82f)) // 40: Right Forehead Boss
-        points.add(BiometricPoint(eyeMidX - eyeD * 1.05f, eyeMidY - eyeD * 0.45f)) // 41: Left Temple
-        points.add(BiometricPoint(eyeMidX + eyeD * 1.05f, eyeMidY - eyeD * 0.45f)) // 42: Right Temple
-
-        // 43..47: Jawline & Chin Contour
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.95f, eyeMidY + eyeD * 1.25f)) // 43: Left Jaw Angle (Gonion)
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.95f, eyeMidY + eyeD * 1.25f)) // 44: Right Jaw Angle (Gonion)
-        points.add(BiometricPoint(eyeMidX - eyeD * 0.40f, eyeMidY + eyeD * 1.80f)) // 45: Left Chin Base
-        points.add(BiometricPoint(eyeMidX + eyeD * 0.40f, eyeMidY + eyeD * 1.80f)) // 46: Right Chin Base
-        points.add(BiometricPoint(eyeMidX, eyeMidY + eyeD * 1.95f)) // 47: Chin Apex (Menton)
-
-        // Complete 3D Biometric Geodesic Mesh (Delaunay Wireframe Edges)
+        // 3D Wireframe Triangular Facet Edges (matching reference geometric mesh)
         val edges = listOf(
-            // 1. DIRECT EYE-TO-NOSE BIOMETRIC LINES (চোখ থেকে নাকে সংযোগকারী বায়োমেট্রিক রেখা)
-            1 to 17, 1 to 18, 6 to 17, 6 to 18,
-            1 to 32, 32 to 18, 32 to 21,
-            6 to 33, 33 to 18, 33 to 22,
-            10 to 16, 13 to 16, 16 to 17,
-            10 to 17, 13 to 17, 10 to 1, 13 to 6,
+            // 1. Outer Facial Perimeter Polygon
+            0 to 1, 1 to 2, 2 to 3, 3 to 4, 4 to 5, 5 to 6, 6 to 7, 7 to 8, 8 to 9, 9 to 0,
 
-            // 2. Left Eye Orbit & Pupil Iris Rays
-            2 to 3, 3 to 1, 1 to 4, 4 to 2,
-            0 to 1, 0 to 2, 0 to 3, 0 to 4,
-            11 to 3, 12 to 2, 10 to 3,
+            // 2. Forehead down to Eyes & Nose Bridge
+            0 to 10, 1 to 12, 2 to 11, 9 to 10, 3 to 11,
 
-            // 3. Right Eye Orbit & Pupil Iris Rays
-            7 to 8, 8 to 6, 6 to 9, 9 to 7,
-            5 to 6, 5 to 7, 5 to 8, 5 to 9,
-            14 to 8, 15 to 7, 13 to 8,
+            // 3. Eye to Nose Bridge & Cheeks (চোখ ও নাকের সংযোগকারী বায়োমেট্রিক রেখা)
+            10 to 12, 11 to 12, 10 to 8, 11 to 4,
 
-            // 4. Eyebrows
-            10 to 11, 11 to 12,
-            13 to 14, 14 to 15,
+            // 4. Nose System (Bridge to tip & nostrils)
+            12 to 13, 12 to 14, 12 to 15, 14 to 13, 15 to 13, 8 to 14, 4 to 15,
 
-            // 5. Nose Dorsum Ridge, Tip & Alar Wings
-            17 to 18, 18 to 19, 19 to 20,
-            18 to 21, 19 to 21, 20 to 21, 21 to 23, 20 to 23,
-            18 to 22, 19 to 22, 20 to 22, 22 to 24, 20 to 24,
+            // 5. Cheek to Jaw Facets
+            8 to 7, 4 to 5,
 
-            // 6. Philtrum & Mouth Vermilion
-            20 to 25, 20 to 26, 25 to 27, 26 to 27, 25 to 26,
-            28 to 25, 29 to 26,
-            28 to 27, 27 to 29,
-            28 to 30, 29 to 30,
-            28 to 31, 29 to 31, 27 to 31, 30 to 31,
-            23 to 28, 24 to 29, // Nasolabial fold (nose crease to mouth corner)
+            // 6. Nose to Mouth & Philtrum
+            13 to 16, 14 to 16, 15 to 16, 7 to 16, 5 to 16,
 
-            // 7. Cheeks & Zygomatic Arches
-            2 to 34, 34 to 41, 34 to 36, 36 to 28, 36 to 43,
-            7 to 35, 35 to 42, 35 to 37, 37 to 29, 37 to 44,
-            32 to 36, 33 to 37,
-
-            // 8. Forehead & Temples
-            38 to 39, 38 to 40, 39 to 41, 40 to 42,
-            38 to 16, 39 to 11, 40 to 14, 41 to 12, 42 to 15,
-
-            // 9. Jawline & Chin
-            41 to 43, 43 to 45, 45 to 47, 47 to 46, 46 to 44, 44 to 42,
-            28 to 45, 29 to 46, 30 to 47, 30 to 45, 30 to 46
+            // 7. Chin Crease & Apex Base
+            16 to 17, 7 to 17, 5 to 17, 17 to 6, 7 to 6, 5 to 6
         )
 
         return Pair(points, edges)

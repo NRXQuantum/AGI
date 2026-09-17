@@ -928,30 +928,23 @@ class ProjectRepository(
                 if (regions.isEmpty() && detectedFaces.isNotEmpty()) {
                     for ((fIdx, fBox) in detectedFaces.withIndex()) {
                         val (lmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(fBox)
-                        val faceW = fBox.rightNorm - fBox.leftNorm
-                        val faceH = fBox.bottomNorm - fBox.topNorm
-                        val pLeft = (fBox.leftNorm - faceW * 0.55f).coerceIn(0f, 1f)
-                        val pRight = (fBox.rightNorm + faceW * 0.55f).coerceIn(0f, 1f)
-                        val pTop = (fBox.topNorm - faceH * 0.18f).coerceIn(0f, 1f)
-                        val pBottom = (fBox.bottomNorm + faceH * 2.8f).coerceIn(0f, 1f)
-                        val bodyBox = FaceBoundingBox(pLeft, pTop, pRight, pBottom)
-                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(bodyBox, isFaceOnly = false)
+                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(fBox, isFaceOnly = true)
 
                         regions.add(
                             DetectedObjectRegion(
                                 classIndex = 0,
-                                classLabel = "Person (Face Biometrics)",
+                                classLabel = "Face Biometrics",
                                 confidence = fBox.confidence,
-                                boxLeftNorm = bodyBox.leftNorm,
-                                boxTopNorm = bodyBox.topNorm,
-                                boxRightNorm = bodyBox.rightNorm,
-                                boxBottomNorm = bodyBox.bottomNorm,
-                                regionTitle = "Person #${fIdx + 1}",
+                                boxLeftNorm = fBox.leftNorm,
+                                boxTopNorm = fBox.topNorm,
+                                boxRightNorm = fBox.rightNorm,
+                                boxBottomNorm = fBox.bottomNorm,
+                                regionTitle = "Face #${fIdx + 1}",
                                 facialLandmarks = lmarks,
                                 facialMeshEdges = edges,
                                 bodyContourPoints = contour,
                                 statureDiagnostics = diag,
-                                statureRatio = if (bodyBox.rightNorm - bodyBox.leftNorm > 0.01f) (bodyBox.bottomNorm - bodyBox.topNorm) / (bodyBox.rightNorm - bodyBox.leftNorm) else 1.5f
+                                statureRatio = if (fBox.rightNorm - fBox.leftNorm > 0.01f) (fBox.bottomNorm - fBox.topNorm) / (fBox.rightNorm - fBox.leftNorm) else 1.3f
                             )
                         )
                         confList.add(ClassConfidence(0, "Person", fBox.confidence))
