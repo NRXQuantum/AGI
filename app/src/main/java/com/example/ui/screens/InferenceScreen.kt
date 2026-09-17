@@ -1126,7 +1126,7 @@ fun InferenceScreen(
                                                 val hPx = size.height
 
                                                 for ((idx, obj) in detected.withIndex()) {
-                                                    // A. Structural Body / Stature Silhouette Contour
+                                                    // A. Structural Body / Visible Silhouette Contour (Matching User Sketch)
                                                     if (showBodyContourOverlay && obj.bodyContourPoints.isNotEmpty()) {
                                                         val contourPath = androidx.compose.ui.graphics.Path()
                                                         obj.bodyContourPoints.forEachIndexed { cIdx, pt ->
@@ -1135,12 +1135,26 @@ fun InferenceScreen(
                                                             if (cIdx == 0) contourPath.moveTo(px, py) else contourPath.lineTo(px, py)
                                                         }
                                                         contourPath.close()
+
+                                                        // Outer Glowing Halo in Orange
                                                         drawPath(
                                                             path = contourPath,
-                                                            color = Color(0xFFF59E0B).copy(alpha = 0.70f),
+                                                            color = Color(0xFFFF6D00).copy(alpha = 0.35f),
                                                             style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                                                width = 2.dp.toPx(),
-                                                                pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+                                                                width = 6.dp.toPx(),
+                                                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                                join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                                            )
+                                                        )
+
+                                                        // Solid High-Definition Vibrant Body Contour Line
+                                                        drawPath(
+                                                            path = contourPath,
+                                                            color = Color(0xFFFF8800),
+                                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                                width = 2.5.dp.toPx(),
+                                                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                                join = androidx.compose.ui.graphics.StrokeJoin.Round
                                                             )
                                                         )
                                                     }
