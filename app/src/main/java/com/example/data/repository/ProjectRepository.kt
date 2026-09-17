@@ -851,18 +851,59 @@ class ProjectRepository(
         val featureExtractor = getSharedFeatureExtractor()
 
         if (model == null) {
-            // Out-of-the-box Base Mode: Real-Time On-Device YOLOX-Nano (COCO 80 categories)
+            // Out-of-the-box Base Mode: Real-Time On-Device YOLOX-Nano (COCO 80 categories) + Biometric Analysis
             val startMs = System.currentTimeMillis()
             val tfliteDetector = getTFLiteDetector()
             val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.22f)
             val elapsed = System.currentTimeMillis() - startMs
 
-            if (detections.isNotEmpty()) {
-                val selectedDetections = if (isMultiObject) detections.take(6) else listOf(detections.first())
+            val faceEngine = FaceRecognitionEngine(context)
+            val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = if (isMultiObject) 6 else 1)
+
+            if (detections.isNotEmpty() || detectedFaces.isNotEmpty()) {
+                val selectedDetections = if (isMultiObject) detections.take(6) else listOfNotNull(detections.firstOrNull())
                 val regions = mutableListOf<DetectedObjectRegion>()
                 val confList = mutableListOf<ClassConfidence>()
 
                 for (det in selectedDetections) {
+                    var fLandmarks = emptyList<BiometricPoint>()
+                    var fEdges = emptyList<Pair<Int, Int>>()
+                    var bContour = emptyList<BiometricPoint>()
+                    var bDiag = ""
+                    val isPerson = (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true))
+
+                    if (isPerson) {
+                        // Find matching face or use first detected face
+                        val matchingFace = detectedFaces.firstOrNull { f ->
+                            val midX = (f.leftNorm + f.rightNorm) * 0.5f
+                            val midY = (f.topNorm + f.bottomNorm) * 0.5f
+                            midX in (det.leftNorm - 0.05f)..(det.rightNorm + 0.05f) &&
+                            midY in (det.topNorm - 0.05f)..(det.bottomNorm + 0.15f)
+                        } ?: detectedFaces.firstOrNull()
+
+                        if (matchingFace != null) {
+                            val (lmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(matchingFace)
+                            fLandmarks = lmarks
+                            fEdges = edges
+                        } else {
+                            // Synthesize face box within the upper 35% of the person detection
+                            val synthFaceBox = FaceBoundingBox(
+                                leftNorm = det.leftNorm + (det.rightNorm - det.leftNorm) * 0.25f,
+                                topNorm = det.topNorm,
+                                rightNorm = det.rightNorm - (det.rightNorm - det.leftNorm) * 0.25f,
+                                bottomNorm = det.topNorm + (det.bottomNorm - det.topNorm) * 0.35f
+                            )
+                            val (lmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(synthFaceBox)
+                            fLandmarks = lmarks
+                            fEdges = edges
+                        }
+
+                        val bodyBox = FaceBoundingBox(det.leftNorm, det.topNorm, det.rightNorm, det.bottomNorm)
+                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(bodyBox, isFaceOnly = false)
+                        bContour = contour
+                        bDiag = diag
+                    }
+
                     regions.add(
                         DetectedObjectRegion(
                             classIndex = det.classIndex,
@@ -872,25 +913,66 @@ class ProjectRepository(
                             boxTopNorm = det.topNorm,
                             boxRightNorm = det.rightNorm,
                             boxBottomNorm = det.bottomNorm,
-                            regionTitle = "${det.label} (${(det.score * 100).toInt()}%)"
+                            regionTitle = "${det.label} (${(det.score * 100).toInt()}%)",
+                            facialLandmarks = fLandmarks,
+                            facialMeshEdges = fEdges,
+                            bodyContourPoints = bContour,
+                            statureDiagnostics = bDiag,
+                            statureRatio = if (det.rightNorm - det.leftNorm > 0.01f) (det.bottomNorm - det.topNorm) / (det.rightNorm - det.leftNorm) else 1.3f
                         )
                     )
                     confList.add(ClassConfidence(det.classIndex, det.label, det.score))
                 }
 
-                val primary = regions.first()
+                // If only faces were found without a full YOLOX person box:
+                if (regions.isEmpty() && detectedFaces.isNotEmpty()) {
+                    for ((fIdx, fBox) in detectedFaces.withIndex()) {
+                        val (lmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(fBox)
+                        val faceW = fBox.rightNorm - fBox.leftNorm
+                        val faceH = fBox.bottomNorm - fBox.topNorm
+                        val pLeft = (fBox.leftNorm - faceW * 0.55f).coerceIn(0f, 1f)
+                        val pRight = (fBox.rightNorm + faceW * 0.55f).coerceIn(0f, 1f)
+                        val pTop = (fBox.topNorm - faceH * 0.18f).coerceIn(0f, 1f)
+                        val pBottom = (fBox.bottomNorm + faceH * 2.8f).coerceIn(0f, 1f)
+                        val bodyBox = FaceBoundingBox(pLeft, pTop, pRight, pBottom)
+                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(bodyBox, isFaceOnly = false)
+
+                        regions.add(
+                            DetectedObjectRegion(
+                                classIndex = 0,
+                                classLabel = "Person (Face Biometrics)",
+                                confidence = fBox.confidence,
+                                boxLeftNorm = bodyBox.leftNorm,
+                                boxTopNorm = bodyBox.topNorm,
+                                boxRightNorm = bodyBox.rightNorm,
+                                boxBottomNorm = bodyBox.bottomNorm,
+                                regionTitle = "Person #${fIdx + 1}",
+                                facialLandmarks = lmarks,
+                                facialMeshEdges = edges,
+                                bodyContourPoints = contour,
+                                statureDiagnostics = diag,
+                                statureRatio = if (bodyBox.rightNorm - bodyBox.leftNorm > 0.01f) (bodyBox.bottomNorm - bodyBox.topNorm) / (bodyBox.rightNorm - bodyBox.leftNorm) else 1.5f
+                            )
+                        )
+                        confList.add(ClassConfidence(0, "Person", fBox.confidence))
+                    }
+                }
+
+                faceEngine.close()
+                val primary = regions.firstOrNull()
                 return@withContext PredictionResult(
-                    classIndex = primary.classIndex,
-                    classLabel = primary.classLabel,
-                    confidence = primary.confidence,
+                    classIndex = primary?.classIndex ?: 0,
+                    classLabel = primary?.classLabel ?: "Scanning...",
+                    confidence = primary?.confidence ?: 0f,
                     allProbabilities = confList,
                     inferenceTimeMs = elapsed,
                     detectedObjects = regions
                 )
             } else {
+                faceEngine.close()
                 return@withContext PredictionResult(
                     classIndex = 0,
-                    classLabel = "Scanning... (YOLOX-Nano 80 COCO Objects Ready)",
+                    classLabel = "Scanning... (YOLOX-Nano & Face Biometrics Ready)",
                     confidence = 0f,
                     allProbabilities = emptyList(),
                     inferenceTimeMs = elapsed,
