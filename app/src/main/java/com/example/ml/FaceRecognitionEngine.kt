@@ -530,7 +530,17 @@ class FaceRecognitionEngine(private val context: Context) {
 
     private fun nmsDeduplicate(boxes: List<FaceBoundingBox>, iouThreshold: Float): List<FaceBoundingBox> {
         if (boxes.size <= 1) return boxes
-        val sorted = boxes.sortedByDescending { it.confidence }
+        // Sort by visual prominence: larger area, closer to center, and high confidence
+        val sorted = boxes.sortedByDescending { box ->
+            val w = (box.rightNorm - box.leftNorm).coerceAtLeast(0f)
+            val h = (box.bottomNorm - box.topNorm).coerceAtLeast(0f)
+            val area = w * h
+            val midX = (box.leftNorm + box.rightNorm) * 0.5f
+            val midY = (box.topNorm + box.bottomNorm) * 0.5f
+            val distFromCenter = kotlin.math.hypot(midX - 0.5f, midY - 0.5f)
+            // Area is the primary factor, penalized slightly if far at image borders
+            (area * (1.0f - (distFromCenter * 0.5f).coerceIn(0f, 0.45f))) * box.confidence
+        }
         val selected = mutableListOf<FaceBoundingBox>()
 
         for (box in sorted) {
@@ -1155,16 +1165,17 @@ class FaceRecognitionEngine(private val context: Context) {
                     )
                 )
 
-                // 1. Check for Face in sample photo
-                val detectedFaces = detectFaces(photo, maxFaces = 1)
+                // 1. Check for Face in sample photo (scan up to 6 faces and pick dominant primary subject)
+                val detectedFaces = detectFaces(photo, maxFaces = 6)
                 if (detectedFaces.isNotEmpty()) {
+                    // detectedFaces is sorted by prominence (largest & most centered face first)
                     val fBox = detectedFaces[0]
                     faceEmbeddings.add(extractFaceEmbedding(photo, fBox))
                     patchEmbeddings.add(extractMultiPatchEmbedding(photo, fBox))
                 }
 
                 // 2. Check for Body / Torso in sample photo
-                val detectedBodies = detectHumanBodies(photo, maxBodies = 1)
+                val detectedBodies = detectHumanBodies(photo, maxBodies = 4)
                 if (detectedBodies.isNotEmpty()) {
                     val bBox = detectedBodies[0]
                     bodyEmbeddings.add(extractBodyAppearanceEmbedding(photo, bBox))
@@ -1179,9 +1190,18 @@ class FaceRecognitionEngine(private val context: Context) {
                 }
             }
 
+            // Outlier rejection: if 3+ photos exist, filter out any accidental photo of another person
+            val cleanFaceEmbeddings = if (faceEmbeddings.size >= 3) {
+                val tempCentroid = computeCentroid(faceEmbeddings)
+                val inliers = faceEmbeddings.filter { cosineSimilarity(it, tempCentroid) >= 0.22f }
+                if (inliers.isNotEmpty()) inliers else faceEmbeddings
+            } else {
+                faceEmbeddings
+            }
+
             // Compute balanced master centroids (Robust Dataset Leveling)
-            val centroid = if (faceEmbeddings.isNotEmpty()) {
-                computeCentroid(faceEmbeddings)
+            val centroid = if (cleanFaceEmbeddings.isNotEmpty()) {
+                computeCentroid(cleanFaceEmbeddings)
             } else if (bodyEmbeddings.isNotEmpty()) {
                 computeCentroid(bodyEmbeddings)
             } else {
@@ -1189,7 +1209,7 @@ class FaceRecognitionEngine(private val context: Context) {
             }
 
             // Track all individual sample embeddings with class index for genuine empirical cross-validation
-            val sampleEmbeddingsForValidation = if (faceEmbeddings.isNotEmpty()) faceEmbeddings else (if (bodyEmbeddings.isNotEmpty()) bodyEmbeddings else patchEmbeddings)
+            val sampleEmbeddingsForValidation = if (cleanFaceEmbeddings.isNotEmpty()) cleanFaceEmbeddings else (if (bodyEmbeddings.isNotEmpty()) bodyEmbeddings else patchEmbeddings)
             for (sEmb in sampleEmbeddingsForValidation) {
                 allEvaluatedSamples.add(Pair(sEmb, classIndex))
             }
