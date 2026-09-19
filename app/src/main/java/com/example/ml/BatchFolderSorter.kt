@@ -1,6 +1,7 @@
 package com.example.ml
 
 import android.app.ActivityManager
+import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -10,6 +11,7 @@ import android.graphics.Paint
 import android.net.Uri
 import android.os.PowerManager
 import android.os.StatFs
+import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
 import com.example.data.repository.ProjectRepository
 import com.example.util.AppLogger
@@ -111,6 +113,20 @@ private sealed class QueuedImageItem {
         override fun deleteSource(context: Context): Boolean = try {
             val doc = DocumentFile.fromSingleUri(context, uri)
             doc?.delete() ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    class MediaStoreSource(val uri: Uri, override val name: String) : QueuedImageItem() {
+        override fun openStream(context: Context): InputStream? = try {
+            context.contentResolver.openInputStream(uri)
+        } catch (_: Exception) {
+            null
+        }
+
+        override fun deleteSource(context: Context): Boolean = try {
+            context.contentResolver.delete(uri, null, null) > 0
         } catch (_: Exception) {
             false
         }
@@ -271,7 +287,56 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                 val imageItems = mutableListOf<QueuedImageItem>()
                 val supportedExtensions = setOf("jpg", "jpeg", "png", "webp", "bmp")
 
-                if (cleanSource.startsWith("content://")) {
+                if (cleanSource == "all_device_photos" || cleanSource.startsWith("mediastore")) {
+                    addLog("📱 Scanning all photos from phone storage (Images only)...")
+                    val projection = arrayOf(
+                        MediaStore.Images.Media._ID,
+                        MediaStore.Images.Media.DISPLAY_NAME,
+                        MediaStore.Images.Media.MIME_TYPE,
+                        MediaStore.Images.Media.SIZE
+                    )
+                    val selection = "${MediaStore.Images.Media.MIME_TYPE} LIKE 'image/%'"
+                    val sortOrder = "${MediaStore.Images.Media.DATE_MODIFIED} DESC"
+                    try {
+                        appContext.contentResolver.query(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            projection,
+                            selection,
+                            null,
+                            sortOrder
+                        )?.use { cursor ->
+                            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                            val nameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                            val mimeCol = cursor.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
+                            val sizeCol = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
+
+                            while (cursor.moveToNext()) {
+                                val id = cursor.getLong(idCol)
+                                val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 1L
+                                if (size <= 0) continue
+
+                                val name = if (nameCol >= 0) cursor.getString(nameCol) else null
+                                val mime = if (mimeCol >= 0) cursor.getString(mimeCol) else null
+                                val displayName = name ?: "device_photo_$id.jpg"
+                                val ext = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+
+                                if (mime?.startsWith("image/") == true || ext in supportedExtensions) {
+                                    val contentUri = ContentUris.withAppendedId(
+                                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                                        id
+                                    )
+                                    imageItems.add(QueuedImageItem.MediaStoreSource(contentUri, displayName))
+                                }
+                            }
+                        }
+                        addLog("📱 Discovered ${imageItems.size} photos across phone gallery & storage.")
+                    } catch (e: Exception) {
+                        val msg = "Could not access device photos: ${e.message}"
+                        addLog("❌ $msg", isError = true)
+                        _state.value = _state.value.copy(isRunning = false, errorMessage = msg)
+                        return@launch
+                    }
+                } else if (cleanSource.startsWith("content://")) {
                     val sourceUri = Uri.parse(cleanSource)
                     val treeDoc = DocumentFile.fromTreeUri(appContext, sourceUri)
                     if (treeDoc == null || !treeDoc.isDirectory) {
@@ -766,6 +831,25 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         _state.value = _state.value.copy(
             logs = (_state.value.logs + formatted).takeLast(40)
         )
+    }
+
+    /**
+     * Returns the total count of images currently available in the device MediaStore.
+     */
+    fun getDevicePhotosCount(): Int {
+        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val selection = "${MediaStore.Images.Media.MIME_TYPE} LIKE 'image/%'"
+        return try {
+            appContext.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                null,
+                null
+            )?.use { it.count } ?: 0
+        } catch (_: Exception) {
+            0
+        }
     }
 
     companion object {

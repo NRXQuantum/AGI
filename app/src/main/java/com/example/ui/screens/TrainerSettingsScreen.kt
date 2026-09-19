@@ -1,11 +1,17 @@
 package com.example.ui.screens
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -33,8 +39,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.documentfile.provider.DocumentFile
-import android.net.Uri
-import android.os.Environment
 import com.example.data.db.ProjectEntity
 import com.example.ml.AutoTuner
 import com.example.ml.BatchFolderSorter
@@ -184,6 +188,44 @@ fun TrainerSettingsScreen(
                 .putString("saved_dest_name", name)
                 .apply()
             Toast.makeText(context, "Destination folder allowed: $name", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val photoPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+
+    var hasPhotoPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, photoPermission) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val photoPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasPhotoPermission = isGranted
+        if (isGranted) {
+            sourceUriOrPath = "all_device_photos"
+            val count = batchSorter.getDevicePhotosCount()
+            sourceDisplayName = "All Photos ($count photos)"
+            sorterPrefs.edit()
+                .putString("saved_source_uri", "all_device_photos")
+                .putString("saved_source_name", sourceDisplayName)
+                .apply()
+            Toast.makeText(context, "All Photos selected: $count photos found", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Storage permission required to access all photos", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    val devicePhotosCount by produceState(initialValue = 0, key1 = hasPhotoPermission, key2 = currentSubPage) {
+        if (hasPhotoPermission) {
+            withContext(Dispatchers.IO) {
+                value = batchSorter.getDevicePhotosCount()
+            }
         }
     }
 
@@ -1460,6 +1502,9 @@ fun TrainerSettingsScreen(
                         Spacer(modifier = Modifier.height(14.dp))
 
                         // 2. Source Folder (Input Photos)
+                        val isAllPhotos = sourceUriOrPath == "all_device_photos" || sourceUriOrPath.startsWith("mediastore")
+                        val isSafFolder = sourceUriOrPath.startsWith("content://")
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1469,7 +1514,19 @@ fun TrainerSettingsScreen(
                                 text = "2. Source Folder (ইনপুট ফোল্ডার):",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
                             )
-                            if (sourceUriOrPath.startsWith("content://")) {
+                            if (isAllPhotos) {
+                                Surface(
+                                    color = Color(0xFF0284C7).copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        text = "📱 All Photos Active",
+                                        color = Color(0xFF0284C7),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            } else if (isSafFolder) {
                                 Surface(
                                     color = Color(0xFF2E7D32).copy(alpha = 0.15f),
                                     shape = RoundedCornerShape(12.dp)
@@ -1488,69 +1545,183 @@ fun TrainerSettingsScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(
-                                containerColor = if (sourceUriOrPath.startsWith("content://"))
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                containerColor = when {
+                                    isAllPhotos -> Color(0xFF0284C7).copy(alpha = 0.12f)
+                                    isSafFolder -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                }
                             ),
                             border = BorderStroke(
                                 1.dp,
-                                if (sourceUriOrPath.startsWith("content://"))
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                                else MaterialTheme.colorScheme.outlineVariant
+                                when {
+                                    isAllPhotos -> Color(0xFF0284C7).copy(alpha = 0.6f)
+                                    isSafFolder -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                    else -> MaterialTheme.colorScheme.outlineVariant
+                                }
                             ),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
+                                // Source Mode Segmented Chips: [ 📱 All Photos ] [ 📂 Custom Folder ] [ 📦 App Folder ]
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                                        .padding(4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    FilterChip(
+                                        selected = isAllPhotos,
+                                        onClick = {
+                                            if (!batchSortState.isRunning) {
+                                                if (hasPhotoPermission) {
+                                                    sourceUriOrPath = "all_device_photos"
+                                                    val count = if (devicePhotosCount > 0) devicePhotosCount else batchSorter.getDevicePhotosCount()
+                                                    sourceDisplayName = "All Photos ($count photos)"
+                                                    sorterPrefs.edit()
+                                                        .putString("saved_source_uri", "all_device_photos")
+                                                        .putString("saved_source_name", sourceDisplayName)
+                                                        .apply()
+                                                    Toast.makeText(context, "All Photos selected ($count photos found)", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    photoPermissionLauncher.launch(photoPermission)
+                                                }
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        },
+                                        label = { Text("All Photos (সকল ছবি)", style = MaterialTheme.typography.labelMedium) },
+                                        modifier = Modifier.weight(1.15f),
+                                        enabled = !batchSortState.isRunning
+                                    )
+
+                                    FilterChip(
+                                        selected = isSafFolder,
+                                        onClick = {
+                                            if (!batchSortState.isRunning) {
+                                                sourceFolderPickerLauncher.launch(null)
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        },
+                                        label = { Text("Folder", style = MaterialTheme.typography.labelMedium) },
+                                        modifier = Modifier.weight(0.9f),
+                                        enabled = !batchSortState.isRunning
+                                    )
+
+                                    FilterChip(
+                                        selected = !isAllPhotos && !isSafFolder,
+                                        onClick = {
+                                            if (!batchSortState.isRunning) {
+                                                sourceUriOrPath = defaultSourceDir
+                                                sourceDisplayName = "App Folder (Unsorted_Images)"
+                                                sorterPrefs.edit()
+                                                    .putString("saved_source_uri", defaultSourceDir)
+                                                    .putString("saved_source_name", sourceDisplayName)
+                                                    .apply()
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        },
+                                        label = { Text("App Folder", style = MaterialTheme.typography.labelMedium) },
+                                        modifier = Modifier.weight(0.95f),
+                                        enabled = !batchSortState.isRunning
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                                            .size(42.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (isAllPhotos) Color(0xFF0284C7).copy(alpha = 0.2f)
+                                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                            ),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
-                                            Icons.Default.FolderOpen,
+                                            imageVector = if (isAllPhotos) Icons.Default.PhotoLibrary else Icons.Default.FolderOpen,
                                             contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(22.dp)
+                                            tint = if (isAllPhotos) Color(0xFF0284C7) else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(24.dp)
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = sourceDisplayName,
+                                            text = if (isAllPhotos) "All Photos (ফোনের সকল ছবি)" else sourceDisplayName,
                                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = if (sourceUriOrPath.startsWith("content://"))
-                                                "Storage Access Framework (SAF Allowed)"
-                                            else "App internal folder",
+                                            text = when {
+                                                isAllPhotos -> "Phone Gallery & Storage • ${if (devicePhotosCount > 0) "$devicePhotosCount photos detected" else "Scans all device image files"}"
+                                                isSafFolder -> "Storage Access Framework (SAF Allowed)"
+                                                else -> "App internal folder"
+                                            },
                                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                            color = if (sourceUriOrPath.startsWith("content://")) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = when {
+                                                isAllPhotos -> Color(0xFF0284C7)
+                                                isSafFolder -> Color(0xFF4CAF50)
+                                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            }
                                         )
                                     }
                                 }
 
                                 Spacer(modifier = Modifier.height(10.dp))
 
-                                Button(
-                                    onClick = { sourceFolderPickerLauncher.launch(null) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !batchSortState.isRunning,
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary
-                                    )
-                                ) {
-                                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(if (sourceUriOrPath.startsWith("content://")) "Change Source Folder (Allow SAF)" else "📂 Select Source Folder (Allow Access)")
+                                if (isAllPhotos) {
+                                    Button(
+                                        onClick = {
+                                            if (hasPhotoPermission) {
+                                                val count = batchSorter.getDevicePhotosCount()
+                                                sourceDisplayName = "All Photos ($count photos)"
+                                                Toast.makeText(context, "Scanned $count photos on phone", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                photoPermissionLauncher.launch(photoPermission)
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !batchSortState.isRunning,
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF0284C7)
+                                        )
+                                    ) {
+                                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            if (hasPhotoPermission)
+                                                "✓ All Photos Active (Tap to Refresh: ${if (devicePhotosCount > 0) "$devicePhotosCount photos" else "Scan"})"
+                                            else
+                                                "Grant Permission for All Photos"
+                                        )
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = { sourceFolderPickerLauncher.launch(null) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !batchSortState.isRunning,
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    ) {
+                                        Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(if (isSafFolder) "Change Source Folder (Allow SAF)" else "📂 Select Source Folder (Allow Access)")
+                                    }
                                 }
 
                                 Spacer(modifier = Modifier.height(6.dp))
@@ -1560,18 +1731,40 @@ fun TrainerSettingsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    SuggestionChip(
-                                        onClick = {
-                                            sourceUriOrPath = defaultSourceDir
-                                            sourceDisplayName = "App Folder (Unsorted_Images)"
-                                            sorterPrefs.edit()
-                                                .putString("saved_source_uri", defaultSourceDir)
-                                                .putString("saved_source_name", sourceDisplayName)
-                                                .apply()
-                                        },
-                                        label = { Text("App Folder", style = MaterialTheme.typography.labelSmall) },
-                                        enabled = !batchSortState.isRunning
-                                    )
+                                    if (!isAllPhotos) {
+                                        SuggestionChip(
+                                            onClick = {
+                                                if (hasPhotoPermission) {
+                                                    sourceUriOrPath = "all_device_photos"
+                                                    val count = if (devicePhotosCount > 0) devicePhotosCount else batchSorter.getDevicePhotosCount()
+                                                    sourceDisplayName = "All Photos ($count photos)"
+                                                    sorterPrefs.edit()
+                                                        .putString("saved_source_uri", "all_device_photos")
+                                                        .putString("saved_source_name", sourceDisplayName)
+                                                        .apply()
+                                                    Toast.makeText(context, "All Photos selected: $count photos found", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    photoPermissionLauncher.launch(photoPermission)
+                                                }
+                                            },
+                                            label = { Text("📱 All Photos", style = MaterialTheme.typography.labelSmall) },
+                                            enabled = !batchSortState.isRunning
+                                        )
+                                    }
+                                    if (isAllPhotos || isSafFolder) {
+                                        SuggestionChip(
+                                            onClick = {
+                                                sourceUriOrPath = defaultSourceDir
+                                                sourceDisplayName = "App Folder (Unsorted_Images)"
+                                                sorterPrefs.edit()
+                                                    .putString("saved_source_uri", defaultSourceDir)
+                                                    .putString("saved_source_name", sourceDisplayName)
+                                                    .apply()
+                                            },
+                                            label = { Text("App Folder", style = MaterialTheme.typography.labelSmall) },
+                                            enabled = !batchSortState.isRunning
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.weight(1f))
                                     OutlinedButton(
                                         onClick = {
@@ -1581,7 +1774,7 @@ fun TrainerSettingsScreen(
                                                     Toast.makeText(context, "Select a model first!", Toast.LENGTH_SHORT).show()
                                                     return@launch
                                                 }
-                                                val srcDir = if (!sourceUriOrPath.startsWith("content://")) {
+                                                val srcDir = if (!sourceUriOrPath.startsWith("content://") && sourceUriOrPath != "all_device_photos") {
                                                     File(sourceUriOrPath)
                                                 } else {
                                                     File(context.getExternalFilesDir(null), "Unsorted_Images").also {
