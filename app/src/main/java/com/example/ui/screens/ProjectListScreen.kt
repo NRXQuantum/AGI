@@ -465,8 +465,8 @@ fun ProjectItemCard(
                         FilledTonalButton(
                             onClick = onTestClick,
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier.height(34.dp).testTag("card_test_btn_${project.id}")
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.defaultMinSize(minHeight = 34.dp).testTag("card_test_btn_${project.id}")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.CheckCircle,
@@ -484,8 +484,8 @@ fun ProjectItemCard(
                     Button(
                         onClick = onClick,
                         shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                        modifier = Modifier.height(34.dp).testTag("card_open_btn_${project.id}")
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.defaultMinSize(minHeight = 34.dp).testTag("card_open_btn_${project.id}")
                     ) {
                         Text(
                             text = "Workspace",

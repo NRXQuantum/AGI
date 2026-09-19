@@ -542,7 +542,7 @@ fun FaceRecognitionStudio(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp)
+                            .defaultMinSize(minHeight = 48.dp)
                             .testTag("build_face_model_btn")
                     ) {
                         if (isBuildingModel) {
@@ -570,7 +570,7 @@ fun FaceRecognitionStudio(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp)
+                            .defaultMinSize(minHeight = 48.dp)
                             .testTag("test_face_live_camera_btn")
                     ) {
                         Icon(imageVector = Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -585,7 +585,7 @@ fun FaceRecognitionStudio(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(46.dp)
+                                .defaultMinSize(minHeight = 46.dp)
                         ) {
                             Icon(imageVector = Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))

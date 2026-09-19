@@ -967,20 +967,22 @@ fun ClassProgressHeader(
                     onClick = onEnrollFace,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp)
+                        .defaultMinSize(minHeight = 46.dp)
                         .testTag("face_enroll_header_btn"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFF0284C7),
                         contentColor = Color.White
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    Icon(Icons.Default.Face, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Face, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        "Face Lock Scan (হেড টার্ন বায়োমেট্রিক)",
+                        text = "Face Lock Scan (হেড টার্ন বায়োমেট্রিক)",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
@@ -995,36 +997,42 @@ fun ClassProgressHeader(
                     onClick = onAddGallery,
                     modifier = Modifier
                         .weight(1f)
+                        .defaultMinSize(minHeight = 40.dp)
                         .testTag("pick_gallery_btn"),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Gallery", fontSize = 12.sp)
+                    Text("Gallery", fontSize = 12.sp, maxLines = 1)
                 }
 
                 OutlinedButton(
                     onClick = onAddFiles,
                     modifier = Modifier
                         .weight(1f)
+                        .defaultMinSize(minHeight = 40.dp)
                         .testTag("pick_files_btn"),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Files", fontSize = 12.sp)
+                    Text("Files", fontSize = 12.sp, maxLines = 1)
                 }
 
                 OutlinedButton(
                     onClick = onAddCamera,
                     modifier = Modifier
                         .weight(1f)
+                        .defaultMinSize(minHeight = 40.dp)
                         .testTag("take_photo_btn"),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Camera", fontSize = 12.sp)
+                    Text("Camera", fontSize = 12.sp, maxLines = 1)
                 }
             }
         }
