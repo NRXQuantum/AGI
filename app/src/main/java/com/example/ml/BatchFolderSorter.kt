@@ -72,6 +72,8 @@ data class BatchSortState(
     val detectedLabel: String = "",
     val confidence: Float = 0f,
     val sortedSummary: Map<String, Int> = emptyMap(),
+    val skippedCount: Int = 0,
+    val skipIfNoFaceDetected: Boolean = false,
     val errorMessage: String? = null,
     val sourceDisplayName: String = "",
     val destinationDisplayName: String = "",
@@ -135,7 +137,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         destinationDisplayName: String,
         repository: ProjectRepository,
         fileAction: FileSortAction = FileSortAction.MOVE,
-        pacingMode: SorterPacingMode = SorterPacingMode.AUTO
+        pacingMode: SorterPacingMode = SorterPacingMode.AUTO,
+        skipIfNoFaceDetected: Boolean = false
     ) {
         startSortingInternal(
             projectId = projectId,
@@ -147,7 +150,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
             destinationDisplayName = destinationDisplayName,
             repository = repository,
             fileAction = fileAction,
-            pacingMode = pacingMode
+            pacingMode = pacingMode,
+            skipIfNoFaceDetected = skipIfNoFaceDetected
         )
     }
 
@@ -158,7 +162,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         destinationUriOrPath: String,
         destinationDisplayName: String,
         fileAction: FileSortAction = FileSortAction.MOVE,
-        pacingMode: SorterPacingMode = SorterPacingMode.AUTO
+        pacingMode: SorterPacingMode = SorterPacingMode.AUTO,
+        skipIfNoFaceDetected: Boolean = false
     ) {
         startSortingInternal(
             projectId = null,
@@ -170,7 +175,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
             destinationDisplayName = destinationDisplayName,
             repository = null,
             fileAction = fileAction,
-            pacingMode = pacingMode
+            pacingMode = pacingMode,
+            skipIfNoFaceDetected = skipIfNoFaceDetected
         )
     }
 
@@ -184,7 +190,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         destinationDisplayName: String,
         repository: ProjectRepository?,
         fileAction: FileSortAction = FileSortAction.MOVE,
-        pacingMode: SorterPacingMode = SorterPacingMode.AUTO
+        pacingMode: SorterPacingMode = SorterPacingMode.AUTO,
+        skipIfNoFaceDetected: Boolean = false
     ) {
         if (_state.value.isRunning) {
             stopSorting()
@@ -199,6 +206,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
 
         val activeModelLabel = customModel?.let { "${it.fileName} (${it.formatName})" } ?: projectName
         val classesInfo = customModel?.let { "${it.numClasses} categories" } ?: ""
+        val faceFilterLog = if (skipIfNoFaceDetected) " | 👤 Face Filter: Skip Non-Faces" else ""
 
         _state.value = BatchSortState(
             isRunning = true,
@@ -209,13 +217,14 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
             activeModelName = activeModelLabel,
             fileAction = fileAction,
             pacingMode = pacingMode,
+            skipIfNoFaceDetected = skipIfNoFaceDetected,
             availableRamMb = initialRamMb,
             freeStorageGb = initialStorageGb,
             hardwareTierName = hardwareProfile.tier.displayName,
             logs = listOf(
                 "🚀 Initiating Batch Auto-Sorter for model: '$activeModelLabel' $classesInfo".trim(),
                 "📱 Device Spec: ${hardwareProfile.description} (${hardwareProfile.tier.displayName})",
-                "⚙️ Config: Mode = ${pacingMode.displayName} | Storage Action = ${fileAction.displayName}",
+                "⚙️ Config: Mode = ${pacingMode.displayName} | Storage Action = ${fileAction.displayName}$faceFilterLog",
                 "📂 Source: $sourceDisplayName",
                 "📂 Target: $destinationDisplayName"
             )
@@ -358,6 +367,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                 }
 
                 featureExtractor = FeatureExtractor(appContext, numThreads = tfliteThreads)
+                val faceEngine = if (skipIfNoFaceDetected) FaceRecognitionEngine(appContext) else null
+                var skippedCount = 0
 
                 val summary = mutableMapOf<String, Int>()
                 val streamBuffer = ByteArray(65536) // 64KB fast buffered stream
@@ -436,8 +447,32 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                     }
 
                     if (bitmap == null) {
+                        skippedCount++
                         addLog("⚠️ Could not decode '${item.name}', skipping.")
+                        _state.value = _state.value.copy(
+                            currentImageIndex = index + 1,
+                            currentImageName = item.name,
+                            skippedCount = skippedCount
+                        )
                         continue
+                    }
+
+                    // Face Filter check: If enabled, verify a human face is detected in the image
+                    if (skipIfNoFaceDetected && faceEngine != null) {
+                        val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
+                        if (detectedFaces.isEmpty()) {
+                            bitmap.recycle()
+                            skippedCount++
+                            addLog("⏭️ [Skipped] No face detected in '${item.name}', moving to next photo...")
+                            _state.value = _state.value.copy(
+                                currentImageIndex = index + 1,
+                                currentImageName = item.name,
+                                detectedLabel = "Skipped (No Face Detected)",
+                                confidence = 0f,
+                                skippedCount = skippedCount
+                            )
+                            continue
+                        }
                     }
 
                     // On-device neural inference
@@ -564,13 +599,15 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                 }
 
                 if (isActive && _state.value.isRunning && !_state.value.isPaused) {
-                    addLog("🎉 Sorting complete! Processed ${_state.value.currentImageIndex} photos into ${summary.size} category folders.")
+                    val skippedMsg = if (skippedCount > 0) ", $skippedCount photos skipped (no face detected)" else ""
+                    addLog("🎉 Sorting complete! Processed ${_state.value.currentImageIndex} photos. Sorted ${summary.values.sum()} photos into ${summary.size} category folders$skippedMsg.")
                     _state.value = _state.value.copy(
                         currentImageIndex = totalCount,
                         isRunning = false,
                         isPaused = false,
                         isCompleted = true,
-                        sortedSummary = summary.toMap()
+                        sortedSummary = summary.toMap(),
+                        skippedCount = skippedCount
                     )
                 }
 

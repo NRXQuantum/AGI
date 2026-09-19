@@ -139,6 +139,9 @@ fun TrainerSettingsScreen(
         val savedMode = sorterPrefs.getString("saved_pacing_mode", SorterPacingMode.AUTO.name)
         mutableStateOf(try { SorterPacingMode.valueOf(savedMode ?: "AUTO") } catch (_: Exception) { SorterPacingMode.AUTO })
     }
+    var skipIfNoFaceDetected by remember {
+        mutableStateOf(sorterPrefs.getBoolean("saved_skip_no_face", false))
+    }
 
     val sourceFolderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -188,6 +191,21 @@ fun TrainerSettingsScreen(
         mutableStateOf(allProjects.firstOrNull { it.isTrained } ?: allProjects.firstOrNull())
     }
     var showSorterProjectDropdown by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedProjectForSorter) {
+        val isFaceProj = selectedProjectForSorter?.projectType == "FACE_RECOGNITION" ||
+                selectedProjectForSorter?.name?.contains("Face", ignoreCase = true) == true
+        if (isFaceProj) {
+            // Automatically enable face filter for Face Recognition project if not explicitly turned off
+            if (!sorterPrefs.contains("saved_skip_no_face")) {
+                skipIfNoFaceDetected = true
+                sorterPrefs.edit().putBoolean("saved_skip_no_face", true).apply()
+            }
+        } else {
+            // For Normal Image Classification projects, NEVER enable face filtering
+            skipIfNoFaceDetected = false
+        }
+    }
 
     var sorterModelSource by remember { mutableStateOf(SorterModelSource.APP_PROJECT) }
     var loadedCustomModel by remember { mutableStateOf<LoadedExportedModel?>(null) }
@@ -1733,11 +1751,108 @@ fun TrainerSettingsScreen(
                             }
                         }
 
+                        val isFaceProj = selectedProjectForSorter?.projectType == "FACE_RECOGNITION" ||
+                                selectedProjectForSorter?.name?.contains("Face", ignoreCase = true) == true
+
+                        if (isFaceProj) {
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // 4. Detection & Face Filtering (শুধুমাত্র ফেস আইডি প্রজেক্টের জন্য প্রযোজ্য)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "4. Face Filter (ফেস ফিল্টারিং ও স্কিপ অপশন):",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Surface(
+                                    color = Color(0xFF0284C7).copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        text = "👤 Face ID Project Only",
+                                        color = Color(0xFF0284C7),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (skipIfNoFaceDetected)
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+                                    else
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (skipIfNoFaceDetected) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                    else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Face,
+                                                contentDescription = null,
+                                                tint = if (skipIfNoFaceDetected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Skip if No Face Detected",
+                                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                                )
+                                                Text(
+                                                    text = "কোনো মুখ/ফেস ডিটেক্ট না হলে ছবি স্কিপ করুন",
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                        Switch(
+                                            checked = skipIfNoFaceDetected,
+                                            onCheckedChange = { checked ->
+                                                if (!batchSortState.isRunning) {
+                                                    skipIfNoFaceDetected = checked
+                                                    sorterPrefs.edit().putBoolean("saved_skip_no_face", checked).apply()
+                                                }
+                                            },
+                                            enabled = !batchSortState.isRunning
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    Text(
+                                        text = "শুধুমাত্র ফেস আইডি প্রজেক্টের জন্য: যদি ছবিতে মানুষের মুখ ডিটেক্ট না হয় (যেমন ফুল, ফল, অবজেক্ট, সিনারি), তবে ছবিটি স্কিপ হবে। সাধারণ ইমেজ ট্রেনিং মডেলের ক্ষেত্রে কোনো ছবি স্কিপ হয় না।",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // 4. Large Dataset & Resource Optimization (10,000+ images RAM & Storage management)
+                        // 5. Large Dataset & Resource Optimization (10,000+ images RAM & Storage management)
                         Text(
-                            text = "4. Resource & Scale Optimization (১০,০০০+ ছবি ও রেম কন্ট্রোল):",
+                            text = "5. Resource & Scale Optimization (১০,০০০+ ছবি ও রেম কন্ট্রোল):",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
                         Spacer(modifier = Modifier.height(6.dp))
@@ -2027,7 +2142,8 @@ fun TrainerSettingsScreen(
                                             destinationDisplayName = destDisplayName,
                                             repository = viewModel.getRepository(),
                                             fileAction = selectedFileAction,
-                                            pacingMode = selectedPacingMode
+                                            pacingMode = selectedPacingMode,
+                                            skipIfNoFaceDetected = skipIfNoFaceDetected
                                         )
                                     } else {
                                         val customModel = loadedCustomModel
@@ -2042,7 +2158,8 @@ fun TrainerSettingsScreen(
                                             destinationUriOrPath = destUriOrPath,
                                             destinationDisplayName = destDisplayName,
                                             fileAction = selectedFileAction,
-                                            pacingMode = selectedPacingMode
+                                            pacingMode = selectedPacingMode,
+                                            skipIfNoFaceDetected = skipIfNoFaceDetected
                                         )
                                     }
                                 },
@@ -2212,6 +2329,35 @@ fun TrainerSettingsScreen(
                                         )
                                     }
 
+                                    if (batchSortState.skippedCount > 0) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Surface(
+                                            color = Color(0xFFE65100).copy(alpha = 0.12f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Face,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFE65100),
+                                                    modifier = Modifier.size(13.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = "Skipped (No Face Detected): ${batchSortState.skippedCount} photos",
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontSize = 10.5.sp,
+                                                        color = Color(0xFFE65100),
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+
                                     if (batchSortState.currentImageName.isNotBlank() && !batchSortState.isPaused) {
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Text(
@@ -2279,6 +2425,57 @@ fun TrainerSettingsScreen(
                                             ) {
                                                 Text(
                                                     text = "$count ${if (count == 1) "photo" else "photos"}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        color = Color.White,
+                                                        fontWeight = FontWeight.Bold
+                                                    ),
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (batchSortState.skippedCount > 0) {
+                                    Surface(
+                                        color = Color(0xFFE65100).copy(alpha = 0.08f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(0.5.dp, Color(0xFFE65100).copy(alpha = 0.25f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.Face,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFE65100),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Column {
+                                                    Text(
+                                                        text = "Skipped (No Face Detected)",
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                    )
+                                                    Text(
+                                                        text = "কোনো মুখ ডিটেক্ট না হওয়ায় স্কিপ করা হয়েছে",
+                                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                            Surface(
+                                                color = Color(0xFFE65100),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Text(
+                                                    text = "${batchSortState.skippedCount} skipped",
                                                     style = MaterialTheme.typography.labelSmall.copy(
                                                         color = Color.White,
                                                         fontWeight = FontWeight.Bold
