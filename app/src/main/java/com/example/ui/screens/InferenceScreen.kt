@@ -1009,7 +1009,11 @@ fun InferenceScreen(
 
                     if (testBitmap != null) {
                         // Quick 1-Click Interactive Overlay Controls (Instantly toggle elements without re-scanning)
-                        val allOverlaysHidden = !showBoundingBoxOverlay && !showBodyContourOverlay && !showFacialMeshOverlay
+                        val allOverlaysHidden = if (isFaceMode) {
+                            !showBoundingBoxOverlay && !showBodyContourOverlay && !showFacialMeshOverlay
+                        } else {
+                            !showBoundingBoxOverlay
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1022,8 +1026,10 @@ fun InferenceScreen(
                                 onClick = {
                                     val nextState = allOverlaysHidden
                                     showBoundingBoxOverlay = nextState
-                                    showBodyContourOverlay = nextState
-                                    showFacialMeshOverlay = nextState
+                                    if (isFaceMode) {
+                                        showBodyContourOverlay = nextState
+                                        showFacialMeshOverlay = nextState
+                                    }
                                 },
                                 color = if (allOverlaysHidden) Color(0xFFEF4444).copy(alpha = 0.18f) else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
                                 shape = RoundedCornerShape(8.dp),
@@ -1059,27 +1065,29 @@ fun InferenceScreen(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 1. Body Frame
+                                // 1. Bounding Box
                                 FilterChip(
                                     selected = showBoundingBoxOverlay,
                                     onClick = { showBoundingBoxOverlay = !showBoundingBoxOverlay },
-                                    label = { Text("▣ Body", fontSize = 10.sp) },
+                                    label = { Text(if (isFaceMode) "▣ Face / Body" else "▣ Detection Box", fontSize = 10.sp) },
                                     modifier = Modifier.height(26.dp)
                                 )
-                                // 2. Body Contour
-                                FilterChip(
-                                    selected = showBodyContourOverlay,
-                                    onClick = { showBodyContourOverlay = !showBodyContourOverlay },
-                                    label = { Text("📐 Contour", fontSize = 10.sp) },
-                                    modifier = Modifier.height(26.dp)
-                                )
-                                // 3. Face Mesh
-                                FilterChip(
-                                    selected = showFacialMeshOverlay,
-                                    onClick = { showFacialMeshOverlay = !showFacialMeshOverlay },
-                                    label = { Text("🕸️ Mesh", fontSize = 10.sp) },
-                                    modifier = Modifier.height(26.dp)
-                                )
+                                if (isFaceMode) {
+                                    // 2. Body Contour
+                                    FilterChip(
+                                        selected = showBodyContourOverlay,
+                                        onClick = { showBodyContourOverlay = !showBodyContourOverlay },
+                                        label = { Text("📐 Contour", fontSize = 10.sp) },
+                                        modifier = Modifier.height(26.dp)
+                                    )
+                                    // 3. Face Mesh
+                                    FilterChip(
+                                        selected = showFacialMeshOverlay,
+                                        onClick = { showFacialMeshOverlay = !showFacialMeshOverlay },
+                                        label = { Text("🕸️ Mesh", fontSize = 10.sp) },
+                                        modifier = Modifier.height(26.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -1128,8 +1136,8 @@ fun InferenceScreen(
                                     if (inferenceResult != null) {
                                         val detected = inferenceResult!!.detectedObjects
 
-                                        // 1. Full-Resolution Biometric & Structural Contour Layer
-                                        if (showBodyContourOverlay || showFacialMeshOverlay) {
+                                        // 1. Full-Resolution Biometric & Structural Contour Layer (Face Recognition Only)
+                                        if (isFaceMode && (showBodyContourOverlay || showFacialMeshOverlay)) {
                                             Canvas(modifier = Modifier.fillMaxSize()) {
                                                 val wPx = size.width
                                                 val hPx = size.height
@@ -1391,23 +1399,6 @@ fun InferenceScreen(
                             }
 
                             Button(
-                                onClick = { showEnlargedPhotoViewer = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier
-                                    .height(38.dp)
-                                    .testTag("enlarge_test_photo_bottom_btn"),
-                                contentPadding = PaddingValues(horizontal = 10.dp)
-                            ) {
-                                Icon(Icons.Default.ZoomIn, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("বড় দেখুন", style = MaterialTheme.typography.labelMedium)
-                            }
-
-                            Button(
                                 onClick = {
                                     testBitmap = null
                                     selectedHighlightIndex = null
@@ -1422,9 +1413,10 @@ fun InferenceScreen(
                                 ),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier
+                                    .weight(1f)
                                     .height(38.dp)
                                     .testTag("clear_test_photo_btn"),
-                                contentPadding = PaddingValues(horizontal = 10.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp)
                             ) {
                                 Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -3028,8 +3020,8 @@ fun EnlargedPhotoViewerDialog(
                         if (inferenceResult != null) {
                             val detected = inferenceResult.detectedObjects
 
-                            // 1. Biometric & Structural Contour Layer
-                            if (showBodyContour || showFacialMesh) {
+                            // 1. Biometric & Structural Contour Layer (Face ID Mode Only)
+                            if (isFaceMode && (showBodyContour || showFacialMesh)) {
                                 Canvas(modifier = Modifier.fillMaxSize()) {
                                     val wPx = size.width
                                     val hPx = size.height
@@ -3202,7 +3194,7 @@ fun EnlargedPhotoViewerDialog(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Column {
                                     Text(
-                                        text = "High-Res Image Viewer",
+                                        text = if (isFaceMode) "Face Biometric Inspector" else "Image Inspection & Zoom",
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                         color = Color.White
                                     )
@@ -3267,21 +3259,23 @@ fun EnlargedPhotoViewerDialog(
                             FilterChip(
                                 selected = showBoundingBox,
                                 onClick = onToggleBoundingBox,
-                                label = { Text("▣ Body Frame", fontSize = 11.sp) },
+                                label = { Text(if (isFaceMode) "▣ Face / Body" else "▣ Detection Box", fontSize = 11.sp) },
                                 modifier = Modifier.height(28.dp)
                             )
-                            FilterChip(
-                                selected = showBodyContour,
-                                onClick = onToggleBodyContour,
-                                label = { Text("📐 Contour", fontSize = 11.sp) },
-                                modifier = Modifier.height(28.dp)
-                            )
-                            FilterChip(
-                                selected = showFacialMesh,
-                                onClick = onToggleFacialMesh,
-                                label = { Text("🕸️ Mesh", fontSize = 11.sp) },
-                                modifier = Modifier.height(28.dp)
-                            )
+                            if (isFaceMode) {
+                                FilterChip(
+                                    selected = showBodyContour,
+                                    onClick = onToggleBodyContour,
+                                    label = { Text("📐 Contour", fontSize = 11.sp) },
+                                    modifier = Modifier.height(28.dp)
+                                )
+                                FilterChip(
+                                    selected = showFacialMesh,
+                                    onClick = onToggleFacialMesh,
+                                    label = { Text("🕸️ Mesh", fontSize = 11.sp) },
+                                    modifier = Modifier.height(28.dp)
+                                )
+                            }
                         }
                     }
                 }

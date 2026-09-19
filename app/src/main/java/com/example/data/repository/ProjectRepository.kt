@@ -532,9 +532,14 @@ class ProjectRepository(
                 val meansJson = org.json.JSONArray().apply { for (m in scaleMeans) put(m.toDouble()) }
                 val stdsJson = org.json.JSONArray().apply { for (s in scaleStds) put(s.toDouble()) }
 
+                // Save weights to persistent file to prevent SQLite CursorWindow 2MB overflow for 20+ classes
+                val modelsDir = File(context.filesDir, "trained_models").apply { mkdirs() }
+                val weightsFile = File(modelsDir, "project_${projectId}_weights.json")
+                weightsFile.writeText(weightsJson.toString(), Charsets.UTF_8)
+
                 val trainedModel = TrainedModelEntity(
                     projectId = projectId,
-                    weightsJson = weightsJson.toString(),
+                    weightsJson = "file:${weightsFile.absolutePath}",
                     biasJson = biasJson.toString(),
                     classLabelsJson = labelsJson.toString(),
                     trainedAt = System.currentTimeMillis(),
@@ -851,7 +856,8 @@ class ProjectRepository(
             val identified = faceEngine.identifyHumansInScene(
                 sceneBitmap = bitmap,
                 enrolledPersons = enrolledList,
-                matchThreshold = currentFaceMatchThreshold
+                matchThreshold = currentFaceMatchThreshold,
+                maxPersons = if (isMultiObject) 6 else 1
             )
 
             val detectedRegions = identified.mapIndexed { idx, person ->
@@ -894,59 +900,18 @@ class ProjectRepository(
         val featureExtractor = getSharedFeatureExtractor()
 
         if (model == null) {
-            // Out-of-the-box Base Mode: Real-Time On-Device YOLOX-Nano (COCO 80 categories) + Biometric Analysis
+            // Out-of-the-box Base Mode: Real-Time On-Device YOLOX-Nano (COCO 80 categories)
             val startMs = System.currentTimeMillis()
             val tfliteDetector = getTFLiteDetector()
             val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.22f)
             val elapsed = System.currentTimeMillis() - startMs
 
-            val faceEngine = FaceRecognitionEngine(context)
-            val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = if (isMultiObject) 6 else 1)
-
-            if (detections.isNotEmpty() || detectedFaces.isNotEmpty()) {
+            if (detections.isNotEmpty()) {
                 val selectedDetections = if (isMultiObject) detections.take(6) else listOfNotNull(detections.firstOrNull())
                 val regions = mutableListOf<DetectedObjectRegion>()
                 val confList = mutableListOf<ClassConfidence>()
 
                 for (det in selectedDetections) {
-                    var fLandmarks = emptyList<BiometricPoint>()
-                    var fEdges = emptyList<Pair<Int, Int>>()
-                    var bContour = emptyList<BiometricPoint>()
-                    var bDiag = ""
-                    val isPerson = (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true))
-
-                    if (isPerson) {
-                        // Find matching face or use first detected face
-                        val matchingFace = detectedFaces.firstOrNull { f ->
-                            val midX = (f.leftNorm + f.rightNorm) * 0.5f
-                            val midY = (f.topNorm + f.bottomNorm) * 0.5f
-                            midX in (det.leftNorm - 0.05f)..(det.rightNorm + 0.05f) &&
-                            midY in (det.topNorm - 0.05f)..(det.bottomNorm + 0.15f)
-                        } ?: detectedFaces.firstOrNull()
-
-                        if (matchingFace != null) {
-                            val (lmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(matchingFace)
-                            fLandmarks = lmarks
-                            fEdges = edges
-                        } else {
-                            // Synthesize face box within the upper 35% of the person detection
-                            val synthFaceBox = FaceBoundingBox(
-                                leftNorm = det.leftNorm + (det.rightNorm - det.leftNorm) * 0.25f,
-                                topNorm = det.topNorm,
-                                rightNorm = det.rightNorm - (det.rightNorm - det.leftNorm) * 0.25f,
-                                bottomNorm = det.topNorm + (det.bottomNorm - det.topNorm) * 0.35f
-                            )
-                            val (lmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(synthFaceBox)
-                            fLandmarks = lmarks
-                            fEdges = edges
-                        }
-
-                        val bodyBox = FaceBoundingBox(det.leftNorm, det.topNorm, det.rightNorm, det.bottomNorm)
-                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(bodyBox, isFaceOnly = false, bitmap = bitmap)
-                        bContour = contour
-                        bDiag = diag
-                    }
-
                     regions.add(
                         DetectedObjectRegion(
                             classIndex = det.classIndex,
@@ -957,44 +922,16 @@ class ProjectRepository(
                             boxRightNorm = det.rightNorm,
                             boxBottomNorm = det.bottomNorm,
                             regionTitle = "${det.label} (${(det.score * 100).toInt()}%)",
-                            facialLandmarks = fLandmarks,
-                            facialMeshEdges = fEdges,
-                            bodyContourPoints = bContour,
-                            statureDiagnostics = bDiag,
-                            statureRatio = if (det.rightNorm - det.leftNorm > 0.01f) (det.bottomNorm - det.topNorm) / (det.rightNorm - det.leftNorm) else 1.3f
+                            facialLandmarks = emptyList(),
+                            facialMeshEdges = emptyList(),
+                            bodyContourPoints = emptyList(),
+                            statureDiagnostics = "",
+                            statureRatio = if (det.rightNorm - det.leftNorm > 0.01f) (det.bottomNorm - det.topNorm) / (det.rightNorm - det.leftNorm) else 1.0f
                         )
                     )
                     confList.add(ClassConfidence(det.classIndex, det.label, det.score))
                 }
 
-                // If only faces were found without a full YOLOX person box:
-                if (regions.isEmpty() && detectedFaces.isNotEmpty()) {
-                    for ((fIdx, fBox) in detectedFaces.withIndex()) {
-                        val (lmarks, edges) = faceEngine.generateFacialMeshAndLandmarks(fBox)
-                        val (contour, diag) = faceEngine.generateBodySilhouetteContour(fBox, isFaceOnly = true, bitmap = bitmap)
-
-                        regions.add(
-                            DetectedObjectRegion(
-                                classIndex = 0,
-                                classLabel = "Face Biometrics",
-                                confidence = fBox.confidence,
-                                boxLeftNorm = fBox.leftNorm,
-                                boxTopNorm = fBox.topNorm,
-                                boxRightNorm = fBox.rightNorm,
-                                boxBottomNorm = fBox.bottomNorm,
-                                regionTitle = "Face #${fIdx + 1}",
-                                facialLandmarks = lmarks,
-                                facialMeshEdges = edges,
-                                bodyContourPoints = contour,
-                                statureDiagnostics = diag,
-                                statureRatio = if (fBox.rightNorm - fBox.leftNorm > 0.01f) (fBox.bottomNorm - fBox.topNorm) / (fBox.rightNorm - fBox.leftNorm) else 1.3f
-                            )
-                        )
-                        confList.add(ClassConfidence(0, "Person", fBox.confidence))
-                    }
-                }
-
-                faceEngine.close()
                 val primary = regions.firstOrNull()
                 return@withContext PredictionResult(
                     classIndex = primary?.classIndex ?: 0,
@@ -1005,10 +942,9 @@ class ProjectRepository(
                     detectedObjects = regions
                 )
             } else {
-                faceEngine.close()
                 return@withContext PredictionResult(
                     classIndex = 0,
-                    classLabel = "Scanning... (YOLOX-Nano & Face Biometrics Ready)",
+                    classLabel = "Scanning... (Camera & Object Detection Active)",
                     confidence = 0f,
                     allProbabilities = emptyList(),
                     inferenceTimeMs = elapsed,
@@ -1294,44 +1230,60 @@ class ProjectRepository(
         if (width < 32 || height < 32) return Pair(fullImageResult, emptyList())
 
         try {
-            val isPersonProject = trainer.classLabels.any {
-                it.contains("person", ignoreCase = true) ||
-                it.contains("face", ignoreCase = true) ||
-                it.contains("human", ignoreCase = true) ||
-                it.contains("man", ignoreCase = true) ||
-                it.contains("woman", ignoreCase = true)
-            }
-
-            // Check for faces first (Selfies, Close-ups, Portraits)
-            val faceEngine = FaceRecognitionEngine(context)
-            val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = if (isMultiObject) 4 else 1)
-            val (faceLandmarks, faceEdges) = if (detectedFaces.isNotEmpty()) {
-                faceEngine.generateFacialMeshAndLandmarks(detectedFaces.first())
-            } else {
-                Pair(emptyList(), emptyList())
-            }
-            faceEngine.close()
-
             val tfliteDetector = getTFLiteDetector()
             val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.20f)
 
+            if (detections.isEmpty()) {
+                lastTrackedSingleBox = null
+                activeSingleTrackingId = null
+                return Pair(fullImageResult, emptyList())
+            }
+
+            val selectedDetections = if (isMultiObject) {
+                detections.take(4)
+            } else {
+                val prevBox = lastTrackedSingleBox
+                if (prevBox != null) {
+                    val prevCx = (prevBox[0] + prevBox[2]) / 2f
+                    val prevCy = (prevBox[1] + prevBox[3]) / 2f
+                    val match = detections.minByOrNull { d ->
+                        val cx = (d.leftNorm + d.rightNorm) / 2f
+                        val cy = (d.topNorm + d.bottomNorm) / 2f
+                        kotlin.math.hypot(cx - prevCx, cy - prevCy)
+                    }
+                    listOfNotNull(match ?: detections.firstOrNull())
+                } else {
+                    val centerMatch = detections.minByOrNull { d ->
+                        val cx = (d.leftNorm + d.rightNorm) / 2f
+                        val cy = (d.topNorm + d.bottomNorm) / 2f
+                        kotlin.math.hypot(cx - 0.5f, cy - 0.5f)
+                    }
+                    listOfNotNull(centerMatch ?: detections.firstOrNull())
+                }
+            }
+
             val candidateRegions = mutableListOf<DetectedObjectRegion>()
 
-            // 1. If faces detected (close-up / portrait / selfie), prioritize face regions with 100% biometric authority
-            for (faceBox in detectedFaces) {
-                var predLabel = "Face"
-                var predConf = faceBox.confidence
-                var predIdx = 0
+            for (det in selectedDetections) {
+                val boxL = det.leftNorm
+                val boxT = det.topNorm
+                val boxR = det.rightNorm
+                val boxB = det.bottomNorm
 
+                var predLabel = det.label
+                var predConf = det.score
+                var predIdx = det.classIndex
+
+                // If user trained custom classes in this project:
                 if (trainer.isTrained && trainer.classLabels.isNotEmpty()) {
                     try {
-                        val cropL = (faceBox.leftNorm * bitmap.width).toInt().coerceIn(0, maxOf(0, bitmap.width - 24))
-                        val cropT = (faceBox.topNorm * bitmap.height).toInt().coerceIn(0, maxOf(0, bitmap.height - 24))
+                        val cropL = (boxL * bitmap.width).toInt().coerceIn(0, maxOf(0, bitmap.width - 24))
+                        val cropT = (boxT * bitmap.height).toInt().coerceIn(0, maxOf(0, bitmap.height - 24))
                         val maxW = bitmap.width - cropL
                         val maxH = bitmap.height - cropT
                         if (maxW >= 16 && maxH >= 16) {
-                            val desiredW = ((faceBox.rightNorm - faceBox.leftNorm) * bitmap.width).toInt()
-                            val desiredH = ((faceBox.bottomNorm - faceBox.topNorm) * bitmap.height).toInt()
+                            val desiredW = ((boxR - boxL) * bitmap.width).toInt()
+                            val desiredH = ((boxB - boxT) * bitmap.height).toInt()
                             val cropW = desiredW.coerceIn(16, maxW)
                             val cropH = desiredH.coerceIn(16, maxH)
 
@@ -1339,7 +1291,7 @@ class ProjectRepository(
                             try {
                                 val cropFeat = featureExtractor.extractFeatures(cropBmp)
                                 val cropPred = trainer.predict(cropFeat)
-                                if (cropPred.confidence >= 0.20f) {
+                                if (cropPred.confidence >= 0.25f) {
                                     predLabel = cropPred.classLabel
                                     predConf = cropPred.confidence
                                     predIdx = cropPred.classIndex
@@ -1351,137 +1303,21 @@ class ProjectRepository(
                     } catch (_: Throwable) {}
                 }
 
-                val helperEngine = FaceRecognitionEngine(context)
-                val (fLandmarks, fEdges) = helperEngine.generateFacialMeshAndLandmarks(faceBox)
-                val (fContour, fDiag) = helperEngine.generateBodySilhouetteContour(faceBox, isFaceOnly = true, bitmap = bitmap)
-                helperEngine.close()
-
                 candidateRegions.add(
                     DetectedObjectRegion(
                         classIndex = predIdx,
                         classLabel = predLabel,
                         confidence = predConf,
-                        boxLeftNorm = faceBox.leftNorm,
-                        boxTopNorm = faceBox.topNorm,
-                        boxRightNorm = faceBox.rightNorm,
-                        boxBottomNorm = faceBox.bottomNorm,
+                        boxLeftNorm = boxL,
+                        boxTopNorm = boxT,
+                        boxRightNorm = boxR,
+                        boxBottomNorm = boxB,
                         regionTitle = predLabel,
-                        facialLandmarks = fLandmarks,
-                        facialMeshEdges = fEdges,
-                        bodyContourPoints = fContour,
-                        statureDiagnostics = fDiag,
-                        statureRatio = if ((faceBox.rightNorm - faceBox.leftNorm) > 0.01f) (faceBox.bottomNorm - faceBox.topNorm) / (faceBox.rightNorm - faceBox.leftNorm) else 1.3f
+                        bodyContourPoints = emptyList(),
+                        statureDiagnostics = "",
+                        statureRatio = if ((boxR - boxL) > 0.01f) (boxB - boxT) / (boxR - boxL) else 1.0f
                     )
                 )
-            }
-
-            // 2. Add object detections if not overlapping with faces
-            if (detections.isNotEmpty()) {
-                val selectedDetections = if (isMultiObject) {
-                    detections.take(4)
-                } else {
-                    val prevBox = lastTrackedSingleBox
-                    if (prevBox != null) {
-                        val prevCx = (prevBox[0] + prevBox[2]) / 2f
-                        val prevCy = (prevBox[1] + prevBox[3]) / 2f
-                        val match = detections.minByOrNull { d ->
-                            val cx = (d.leftNorm + d.rightNorm) / 2f
-                            val cy = (d.topNorm + d.bottomNorm) / 2f
-                            kotlin.math.hypot(cx - prevCx, cy - prevCy)
-                        }
-                        listOfNotNull(match ?: detections.firstOrNull())
-                    } else {
-                        val centerMatch = detections.minByOrNull { d ->
-                            val cx = (d.leftNorm + d.rightNorm) / 2f
-                            val cy = (d.topNorm + d.bottomNorm) / 2f
-                            kotlin.math.hypot(cx - 0.5f, cy - 0.5f)
-                        }
-                        listOfNotNull(centerMatch ?: detections.firstOrNull())
-                    }
-                }
-
-                for (det in selectedDetections) {
-                    val boxL = det.leftNorm
-                    val boxT = det.topNorm
-                    val boxR = det.rightNorm
-                    val boxB = det.bottomNorm
-
-                    var predLabel = det.label
-                    var predConf = det.score
-                    var predIdx = det.classIndex
-
-                    val isDetPerson = (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true))
-
-                    // If user trained custom classes in this project:
-                    if (trainer.isTrained && trainer.classLabels.isNotEmpty()) {
-                        val shouldClassify = if (isPersonProject) isDetPerson else true
-                        if (shouldClassify) {
-                            try {
-                                val cropL = (boxL * bitmap.width).toInt().coerceIn(0, maxOf(0, bitmap.width - 24))
-                                val cropT = (boxT * bitmap.height).toInt().coerceIn(0, maxOf(0, bitmap.height - 24))
-                                val maxW = bitmap.width - cropL
-                                val maxH = bitmap.height - cropT
-                                if (maxW >= 16 && maxH >= 16) {
-                                    val desiredW = ((boxR - boxL) * bitmap.width).toInt()
-                                    val desiredH = ((boxB - boxT) * bitmap.height).toInt()
-                                    val cropW = desiredW.coerceIn(16, maxW)
-                                    val cropH = desiredH.coerceIn(16, maxH)
-
-                                    val cropBmp = Bitmap.createBitmap(bitmap, cropL, cropT, cropW, cropH)
-                                    try {
-                                        val cropFeat = featureExtractor.extractFeatures(cropBmp)
-                                        val cropPred = trainer.predict(cropFeat)
-                                        if (cropPred.confidence >= 0.25f) {
-                                            predLabel = cropPred.classLabel
-                                            predConf = cropPred.confidence
-                                            predIdx = cropPred.classIndex
-                                        }
-                                    } finally {
-                                        cropBmp.recycle()
-                                    }
-                                }
-                            } catch (_: Throwable) {}
-                        }
-                    }
-
-                    // If we already have a face box covering this person, avoid duplicate bloated box
-                    val overlapsWithFace = candidateRegions.any { f ->
-                        val midX = (f.boxLeftNorm + f.boxRightNorm) * 0.5f
-                        val midY = (f.boxTopNorm + f.boxBottomNorm) * 0.5f
-                        midX in boxL..boxR && midY in boxT..boxB
-                    }
-
-                    if (!overlapsWithFace || !isDetPerson) {
-                        var bContour = emptyList<BiometricPoint>()
-                        var bDiag = ""
-                        var bRatio = 0f
-                        if (isDetPerson) {
-                            val helperEngine = FaceRecognitionEngine(context)
-                            val bBox = FaceBoundingBox(boxL, boxT, boxR, boxB, predConf)
-                            val (cPoints, cDiag) = helperEngine.generateBodySilhouetteContour(bBox, isFaceOnly = false, bitmap = bitmap)
-                            helperEngine.close()
-                            bContour = cPoints
-                            bDiag = cDiag
-                            bRatio = if ((boxR - boxL) > 0.01f) (boxB - boxT) / (boxR - boxL) else 1.5f
-                        }
-
-                        candidateRegions.add(
-                            DetectedObjectRegion(
-                                classIndex = predIdx,
-                                classLabel = predLabel,
-                                confidence = predConf,
-                                boxLeftNorm = boxL,
-                                boxTopNorm = boxT,
-                                boxRightNorm = boxR,
-                                boxBottomNorm = boxB,
-                                regionTitle = predLabel,
-                                bodyContourPoints = bContour,
-                                statureDiagnostics = bDiag,
-                                statureRatio = bRatio
-                            )
-                        )
-                    }
-                }
             }
 
             val regions = candidateRegions.take(if (isMultiObject) 4 else 1)

@@ -71,16 +71,12 @@ fun ClassManagementScreen(
     // Interactive Data Labeling & Batch Management States
     var isSelectMode by remember { mutableStateOf(false) }
     var selectedSampleIds by remember { mutableStateOf(setOf<Long>()) }
-    var sampleToMove by remember { mutableStateOf<ImageSampleEntity?>(null) }
-    var showBatchMoveDialog by remember { mutableStateOf(false) }
     var previewSample by remember { mutableStateOf<ImageSampleEntity?>(null) }
 
     // Clear selection when switching classes
     LaunchedEffect(selectedClassId) {
         isSelectMode = false
         selectedSampleIds = emptySet()
-        sampleToMove = null
-        showBatchMoveDialog = false
     }
 
     // Pick photos from Gallery
@@ -445,16 +441,6 @@ fun ClassManagementScreen(
 
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         if (selectedSampleIds.isNotEmpty()) {
-                                            Button(
-                                                onClick = { showBatchMoveDialog = true },
-                                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                                            ) {
-                                                Icon(Icons.Default.DriveFileMove, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text("Re-label (${selectedSampleIds.size})", fontSize = 12.sp)
-                                            }
-
                                             OutlinedButton(
                                                 onClick = {
                                                     viewModel.deleteSamplesBatch(selectedSampleIds.toList())
@@ -467,7 +453,7 @@ fun ClassManagementScreen(
                                             ) {
                                                 Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                                                 Spacer(modifier = Modifier.width(4.dp))
-                                                Text("Delete", fontSize = 12.sp)
+                                                Text("Delete (${selectedSampleIds.size})", fontSize = 12.sp)
                                             }
                                         }
 
@@ -526,7 +512,6 @@ fun ClassManagementScreen(
                                         }
                                     },
                                     onClickPreview = { previewSample = sample },
-                                    onRelabel = { sampleToMove = sample },
                                     onDelete = { viewModel.deleteSample(sample.id) }
                                 )
                             }
@@ -598,172 +583,7 @@ fun ClassManagementScreen(
         )
     }
 
-    // Single Sample Re-label / Move Dialog
-    if (sampleToMove != null) {
-        val otherClasses = classes.filter { it.id != sampleToMove!!.classId }
-        AlertDialog(
-            onDismissRequest = { sampleToMove = null },
-            title = {
-                Text(
-                    text = if (isFaceRecognition) "Reassign Photo to Person" else "Re-label Image to Class",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                if (otherClasses.isEmpty()) {
-                    Text(
-                        if (isFaceRecognition)
-                            "No other enrolled individuals. Please enroll another person first."
-                        else
-                            "No other classes available. Please create another class first."
-                    )
-                } else {
-                    Column {
-                        Text(
-                            text = if (isFaceRecognition)
-                                "Select the person this face/body photo belongs to:"
-                            else
-                                "Select the destination class category:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(1),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.heightIn(max = 240.dp)
-                        ) {
-                            items(otherClasses) { targetClass ->
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .clickable {
-                                            viewModel.updateSampleClass(sampleToMove!!.id, targetClass.id)
-                                            sampleToMove = null
-                                            Toast.makeText(context, "Image re-labeled to '${targetClass.className}'", Toast.LENGTH_SHORT).show()
-                                        },
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clip(CircleShape)
-                                                .background(
-                                                    try {
-                                                        Color(android.graphics.Color.parseColor(targetClass.colorHex))
-                                                    } catch (_: Exception) {
-                                                        MaterialTheme.colorScheme.primary
-                                                    }
-                                                )
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = targetClass.className,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { sampleToMove = null }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 
-    // Batch Re-label / Move Dialog
-    if (showBatchMoveDialog && selectedSampleIds.isNotEmpty() && selectedClass != null) {
-        val otherClasses = classes.filter { it.id != selectedClass.id }
-        AlertDialog(
-            onDismissRequest = { showBatchMoveDialog = false },
-            title = {
-                Text(
-                    text = "Batch Re-label (${selectedSampleIds.size} Images)",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                if (otherClasses.isEmpty()) {
-                    Text(
-                        if (isFaceRecognition)
-                            "No other enrolled individuals. Please enroll another person first."
-                        else
-                            "No other classes available. Please create another class first."
-                    )
-                } else {
-                    Column {
-                        Text(
-                            text = "Move all ${selectedSampleIds.size} selected images to which class?",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(1),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.heightIn(max = 240.dp)
-                        ) {
-                            items(otherClasses) { targetClass ->
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .clickable {
-                                            viewModel.moveSamplesBatch(selectedSampleIds.toList(), targetClass.id)
-                                            selectedSampleIds = emptySet()
-                                            isSelectMode = false
-                                            showBatchMoveDialog = false
-                                            Toast.makeText(context, "Moved samples to '${targetClass.className}'", Toast.LENGTH_SHORT).show()
-                                        },
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clip(CircleShape)
-                                                .background(
-                                                    try {
-                                                        Color(android.graphics.Color.parseColor(targetClass.colorHex))
-                                                    } catch (_: Exception) {
-                                                        MaterialTheme.colorScheme.primary
-                                                    }
-                                                )
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = targetClass.className,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showBatchMoveDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 
     // High-Resolution Sample Inspection Preview Dialog
     if (previewSample != null) {
@@ -814,17 +634,6 @@ fun ClassManagementScreen(
             },
             confirmButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            val cur = previewSample!!
-                            previewSample = null
-                            sampleToMove = cur
-                        }
-                    ) {
-                        Icon(Icons.Default.DriveFileMove, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Re-label")
-                    }
                     OutlinedButton(
                         onClick = {
                             val id = previewSample!!.id
@@ -834,7 +643,12 @@ fun ClassManagementScreen(
                         },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                     ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text("Delete")
+                    }
+                    Button(onClick = { previewSample = null }) {
+                        Text("Close")
                     }
                 }
             },
@@ -1034,7 +848,6 @@ fun ImageSampleGridTile(
     isSelected: Boolean = false,
     onToggleSelect: () -> Unit = {},
     onClickPreview: () -> Unit = {},
-    onRelabel: () -> Unit = {},
     onDelete: () -> Unit
 ) {
     val file = remember(sample.imagePath) { File(sample.imagePath) }
@@ -1104,20 +917,6 @@ fun ImageSampleGridTile(
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                IconButton(
-                    onClick = onRelabel,
-                    modifier = Modifier
-                        .size(26.dp)
-                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                ) {
-                    Icon(
-                        Icons.Default.DriveFileMove,
-                        contentDescription = "Re-label sample",
-                        tint = Color.White,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-
                 IconButton(
                     onClick = onDelete,
                     modifier = Modifier

@@ -36,9 +36,21 @@ class PersonBodySegmenter(isStreamMode: Boolean = false) : AutoCloseable {
 
     private val segmenter: Segmenter = Segmentation.getClient(options)
 
+    // Per-frame mask cache to make multi-person segmentation instantaneous and prevent memory churn / phone hangs
+    @Volatile
+    private var cachedFrameKey: Int = -1
+    @Volatile
+    private var cachedClosedBinary: BooleanArray? = null
+    @Volatile
+    private var cachedMaskW: Int = 0
+    @Volatile
+    private var cachedMaskH: Int = 0
+
     /**
      * Synchronously extracts high-definition body silhouette contour points from a bitmap.
      * Can be called from any background thread.
+     * Downscales the image to an optimal neural size (max 320px) to prevent OOM/phone freeze
+     * and caches the frame mask for instant multi-person extraction.
      */
     fun extractBodyContourSync(
         bitmap: Bitmap,
@@ -49,34 +61,65 @@ class PersonBodySegmenter(isStreamMode: Boolean = false) : AutoCloseable {
             return Pair(emptyList(), "Image unavailable")
         }
 
+        // Downscale to fast, lightweight neural dimensions (max 320px)
+        val maxDim = 320
+        val scale = if (max(bitmap.width, bitmap.height) > maxDim) {
+            maxDim.toFloat() / max(bitmap.width, bitmap.height)
+        } else 1.0f
+
+        val workingBmp = if (scale < 1.0f) {
+            val sw = ((bitmap.width * scale).toInt() / 2) * 2
+            val sh = ((bitmap.height * scale).toInt() / 2) * 2
+            try {
+                Bitmap.createScaledBitmap(bitmap, sw.coerceAtLeast(16), sh.coerceAtLeast(16), true)
+            } catch (_: Throwable) {
+                bitmap
+            }
+        } else {
+            bitmap
+        }
+        val isWorkingBmpTemporary = (workingBmp !== bitmap)
+
+        val frameKey = System.identityHashCode(bitmap) xor (bitmap.width shl 16) xor bitmap.height
+
         return try {
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
-            val mask: SegmentationMask = Tasks.await(segmenter.process(inputImage))
+            val (closedBinary, maskW, maskH) = synchronized(this) {
+                if (cachedFrameKey == frameKey && cachedClosedBinary != null && cachedMaskW > 0 && cachedMaskH > 0) {
+                    Triple(cachedClosedBinary!!, cachedMaskW, cachedMaskH)
+                } else {
+                    val inputImage = InputImage.fromBitmap(workingBmp, 0)
+                    val mask: SegmentationMask = Tasks.await(segmenter.process(inputImage))
 
-            val maskW = mask.width
-            val maskH = mask.height
-            val buffer = mask.buffer
-            buffer.rewind()
-            val floatBuf = buffer.asFloatBuffer()
+                    val mW = mask.width
+                    val mH = mask.height
+                    val buffer = mask.buffer
+                    buffer.rewind()
+                    val floatBuf = buffer.asFloatBuffer()
 
-            val totalPixels = maskW * maskH
-            val rawBinary = BooleanArray(totalPixels)
-            var foregroundPixelCount = 0
+                    val totalPixels = mW * mH
+                    val rawBinary = BooleanArray(totalPixels)
+                    var foregroundPixelCount = 0
 
-            for (i in 0 until totalPixels) {
-                val conf = floatBuf.get(i)
-                if (conf >= confidenceThreshold) {
-                    rawBinary[i] = true
-                    foregroundPixelCount++
+                    for (i in 0 until totalPixels) {
+                        val conf = floatBuf.get(i)
+                        if (conf >= confidenceThreshold) {
+                            rawBinary[i] = true
+                            foregroundPixelCount++
+                        }
+                    }
+
+                    if (foregroundPixelCount < 20) {
+                        return Pair(emptyList(), "No silhouette detected")
+                    }
+
+                    val closed = morphologicalClose(rawBinary, mW, mH)
+                    cachedFrameKey = frameKey
+                    cachedClosedBinary = closed
+                    cachedMaskW = mW
+                    cachedMaskH = mH
+                    Triple(closed, mW, mH)
                 }
             }
-
-            if (foregroundPixelCount < 40) {
-                return Pair(emptyList(), "No silhouette detected")
-            }
-
-            // Morphological closing (dilation followed by erosion) to seal thin wrist/finger gaps
-            val closedBinary = morphologicalClose(rawBinary, maskW, maskH)
 
             // Extract isolated component connected to targetBox or largest person blob (with 8-connected flood fill)
             val selectedMask = isolateTargetComponent(
@@ -106,7 +149,7 @@ class PersonBodySegmenter(isStreamMode: Boolean = false) : AutoCloseable {
                 }
             }
 
-            if (selectedPixels < 30) {
+            if (selectedPixels < 20) {
                 return Pair(emptyList(), "No person segment isolated")
             }
 
@@ -142,6 +185,12 @@ class PersonBodySegmenter(isStreamMode: Boolean = false) : AutoCloseable {
             Pair(normalizedContour, diag)
         } catch (e: Throwable) {
             Pair(emptyList(), "Segmentation fallback: ${e.message ?: "error"}")
+        } finally {
+            if (isWorkingBmpTemporary && !workingBmp.isRecycled) {
+                try {
+                    workingBmp.recycle()
+                } catch (_: Throwable) {}
+            }
         }
     }
 

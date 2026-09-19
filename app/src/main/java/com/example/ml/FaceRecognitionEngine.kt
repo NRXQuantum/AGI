@@ -104,9 +104,9 @@ class FaceRecognitionEngine(private val context: Context) {
         val detectedBoxes = mutableListOf<FaceBoundingBox>()
         val maxDim = max(width, height)
 
-        // Multi-scale pyramid: native scale + normalized downscales for extreme close-ups
+        // Multi-scale pyramid: normalized downscales for extreme close-ups and high-megapixel photos
         val scales = if (maxDim > 640) {
-            listOf(640f / maxDim, 480f / maxDim, 1.0f)
+            listOf(640f / maxDim, 480f / maxDim)
         } else {
             listOf(1.0f)
         }
@@ -451,7 +451,11 @@ class FaceRecognitionEngine(private val context: Context) {
      * Guarantees zero false positives on inanimate objects (tables, chairs, walls, floors),
      * and adapts dynamically so close-ups / selfies focus cleanly on the face rather than swallowing the whole frame.
      */
-    fun detectHumanBodies(bitmap: Bitmap, maxBodies: Int = 6): List<FaceBoundingBox> {
+    fun detectHumanBodies(
+        bitmap: Bitmap,
+        maxBodies: Int = 6,
+        precomputedFaces: List<FaceBoundingBox>? = null
+    ): List<FaceBoundingBox> {
         val w = bitmap.width
         val h = bitmap.height
         if (w < 32 || h < 32) return emptyList()
@@ -481,8 +485,8 @@ class FaceRecognitionEngine(private val context: Context) {
             }
         } catch (_: Throwable) {}
 
-        // 2. Run multi-scale FaceDetector; project anthropometric upper body only if NOT already an extreme close-up
-        val faces = detectFaces(bitmap, maxFaces = maxBodies)
+        // 2. Run multi-scale FaceDetector (reusing precomputed faces if available to avoid duplicate inference)
+        val faces = precomputedFaces ?: detectFaces(bitmap, maxFaces = maxBodies)
         for (f in faces) {
             val faceW = f.rightNorm - f.leftNorm
             val faceH = f.bottomNorm - f.topNorm
@@ -636,13 +640,14 @@ class FaceRecognitionEngine(private val context: Context) {
     fun identifyHumansInScene(
         sceneBitmap: Bitmap,
         enrolledPersons: List<EnrolledPerson>,
-        matchThreshold: Float = 0.50f
+        matchThreshold: Float = 0.50f,
+        maxPersons: Int = 6
     ): List<IdentifiedPerson> {
         if (enrolledPersons.isEmpty()) return emptyList()
 
-        // 1. Detect genuine faces and genuine neural-detected human bodies
-        val faces = detectFaces(sceneBitmap, maxFaces = 8)
-        val bodies = detectHumanBodies(sceneBitmap, maxBodies = 8)
+        // 1. Detect genuine faces and genuine neural-detected human bodies (reusing faces for bodies)
+        val faces = detectFaces(sceneBitmap, maxFaces = maxPersons)
+        val bodies = detectHumanBodies(sceneBitmap, maxBodies = maxPersons, precomputedFaces = faces)
 
         // If neither face nor person body was found by the neural / biometric engines, scene has no humans!
         if (faces.isEmpty() && bodies.isEmpty()) {
@@ -654,6 +659,7 @@ class FaceRecognitionEngine(private val context: Context) {
 
         // 2. Process Face detections first (Highest biometric accuracy & zero background interference)
         for (faceBox in faces) {
+            if (results.size >= maxPersons) break
             val faceEmb = extractFaceEmbedding(sceneBitmap, faceBox)
             val patchEmb = extractMultiPatchEmbedding(sceneBitmap, faceBox)
 
@@ -744,6 +750,7 @@ class FaceRecognitionEngine(private val context: Context) {
 
         // 3. Process remaining unlinked Neural-Detected Person bodies (only when face was completely not visible)
         for ((bIdx, bodyBox) in bodies.withIndex()) {
+            if (results.size >= maxPersons) break
             if (processedBodyIndices.contains(bIdx)) continue
 
             val bodyEmb = extractBodyAppearanceEmbedding(sceneBitmap, bodyBox)
