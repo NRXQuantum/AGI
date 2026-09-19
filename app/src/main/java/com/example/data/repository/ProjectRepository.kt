@@ -1388,6 +1388,10 @@ class ProjectRepository(
         dao.getLatestTrainedModelDirect(projectId)
     }
 
+    suspend fun getDirectProject(projectId: Long): ProjectEntity? = withContext(Dispatchers.IO) {
+        dao.getProjectByIdDirect(projectId)
+    }
+
     suspend fun getDirectClasses(projectId: Long): List<ClassificationClassEntity> = withContext(Dispatchers.IO) {
         dao.getClassesForProjectDirect(projectId)
     }

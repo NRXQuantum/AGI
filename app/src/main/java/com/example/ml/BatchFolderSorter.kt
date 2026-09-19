@@ -250,6 +250,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
 
         sortingJob = sorterScope.launch {
             var featureExtractor: FeatureExtractor? = null
+            var faceEngine: FaceRecognitionEngine? = null
             try {
                 // 1. Verify and instantiate neural model
                 val trainer: OnDeviceTrainer = if (customModel != null) {
@@ -431,8 +432,38 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                     }
                 }
 
-                featureExtractor = FeatureExtractor(appContext, numThreads = tfliteThreads)
-                val faceEngine = if (skipIfNoFaceDetected) FaceRecognitionEngine(appContext) else null
+                val directProject = if (projectId != null) repository?.getDirectProject(projectId) else null
+                val isFaceModel = projectName.startsWith("[Face ID]") ||
+                        projectName.contains("Face", ignoreCase = true) ||
+                        (directProject?.projectType == "FACE_RECOGNITION" || directProject?.name?.contains("Face", ignoreCase = true) == true) ||
+                        (customModel?.fileName?.contains("Face", ignoreCase = true) == true) ||
+                        skipIfNoFaceDetected
+
+                if (isFaceModel || skipIfNoFaceDetected) {
+                    faceEngine = FaceRecognitionEngine(appContext)
+                }
+
+                if (!isFaceModel) {
+                    featureExtractor = FeatureExtractor(appContext, numThreads = tfliteThreads)
+                }
+
+                val enrolledPersons: List<EnrolledPerson> = if (isFaceModel && faceEngine != null) {
+                    addLog("👤 Face Biometric Model active: using facial crop detection and cosine centroid matching.")
+                    trainer.classLabels.mapIndexed { cIdx, label ->
+                        val centroid = FloatArray(trainer.featureDim) { f ->
+                            trainer.weights[cIdx][f] / 8.0f
+                        }
+                        EnrolledPerson(
+                            id = cIdx.toLong(),
+                            name = label,
+                            faceSamplePaths = emptyList(),
+                            centroidEmbedding = centroid
+                        )
+                    }
+                } else {
+                    emptyList()
+                }
+
                 var skippedCount = 0
 
                 val summary = mutableMapOf<String, Int>()
@@ -490,7 +521,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                         delay(pacingDelayMs)
                     }
 
-                    // Decode with RGB_565 (50% RAM savings compared to ARGB_8888) and inSampleSize downsampling
+                    // Decode with gentle downsampling to preserve facial features while saving RAM
                     val decodeBoundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     item.openStream(appContext)?.use {
                         BitmapFactory.decodeStream(it, null, decodeBoundsOpts)
@@ -498,7 +529,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
 
                     val maxDim = maxOf(decodeBoundsOpts.outWidth, decodeBoundsOpts.outHeight)
                     var sampleSize = 1
-                    while (maxDim / (sampleSize * 2) >= 224) {
+                    while (maxDim / (sampleSize * 2) >= 640) {
                         sampleSize *= 2
                     }
 
@@ -522,31 +553,75 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                         continue
                     }
 
-                    // Face Filter check: If enabled, verify a human face is detected in the image
-                    if (skipIfNoFaceDetected && faceEngine != null) {
-                        val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
-                        if (detectedFaces.isEmpty()) {
-                            bitmap.recycle()
-                            skippedCount++
-                            addLog("⏭️ [Skipped] No face detected in '${item.name}', moving to next photo...")
-                            _state.value = _state.value.copy(
-                                currentImageIndex = index + 1,
-                                currentImageName = item.name,
-                                detectedLabel = "Skipped (No Face Detected)",
-                                confidence = 0f,
-                                skippedCount = skippedCount
-                            )
-                            continue
+                    var rawLabel = ""
+                    var predictionConfidence = 0f
+
+                    if (isFaceModel && faceEngine != null && enrolledPersons.isNotEmpty()) {
+                        // Accurate Face Recognition Pipeline: Detect face, crop, extract 128D embedding, match against enrolled centroids
+                        val matchThreshold = repository?.getFaceMatchThreshold() ?: 0.50f
+                        val identified = faceEngine.identifyHumansInScene(
+                            sceneBitmap = bitmap,
+                            enrolledPersons = enrolledPersons,
+                            matchThreshold = matchThreshold,
+                            maxPersons = 1
+                        )
+
+                        if (identified.isEmpty()) {
+                            if (skipIfNoFaceDetected) {
+                                bitmap.recycle()
+                                skippedCount++
+                                addLog("⏭️ [Skipped] No face detected in '${item.name}', moving to next photo...")
+                                _state.value = _state.value.copy(
+                                    currentImageIndex = index + 1,
+                                    currentImageName = item.name,
+                                    detectedLabel = "Skipped (No Face Detected)",
+                                    confidence = 0f,
+                                    skippedCount = skippedCount
+                                )
+                                continue
+                            } else {
+                                rawLabel = "No Face Detected"
+                                predictionConfidence = 0f
+                            }
+                        } else {
+                            val topPerson = identified[0]
+                            if (topPerson.personName == "Unknown Person") {
+                                rawLabel = "Unknown Person"
+                                predictionConfidence = topPerson.confidence
+                            } else {
+                                rawLabel = topPerson.personName
+                                predictionConfidence = topPerson.confidence
+                            }
                         }
+                    } else {
+                        // Standard Image Classification check for face filter if enabled
+                        if (skipIfNoFaceDetected && faceEngine != null) {
+                            val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
+                            if (detectedFaces.isEmpty()) {
+                                bitmap.recycle()
+                                skippedCount++
+                                addLog("⏭️ [Skipped] No face detected in '${item.name}', moving to next photo...")
+                                _state.value = _state.value.copy(
+                                    currentImageIndex = index + 1,
+                                    currentImageName = item.name,
+                                    detectedLabel = "Skipped (No Face Detected)",
+                                    confidence = 0f,
+                                    skippedCount = skippedCount
+                                )
+                                continue
+                            }
+                        }
+
+                        val extractor = featureExtractor ?: FeatureExtractor(appContext, numThreads = tfliteThreads).also { featureExtractor = it }
+                        val features = extractor.extractFeatures(bitmap)
+                        val prediction = trainer.predict(features)
+                        rawLabel = prediction.classLabel
+                        predictionConfidence = prediction.confidence
                     }
 
-                    // On-device neural inference
-                    val features = featureExtractor.extractFeatures(bitmap)
-                    val prediction = trainer.predict(features)
                     bitmap.recycle() // Immediately recycle native bitmap memory
 
-                    val rawLabel = prediction.classLabel.trim()
-                    val safeCategoryName = rawLabel.replace("/", "_").replace("\\", "_").ifBlank { "Unclassified" }
+                    val safeCategoryName = rawLabel.trim().replace("/", "_").replace("\\", "_").ifBlank { "Unclassified" }
 
                     var sortedSuccess = false
 
@@ -650,7 +725,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                             currentImageIndex = index + 1,
                             currentImageName = item.name,
                             detectedLabel = safeCategoryName,
-                            confidence = prediction.confidence,
+                            confidence = predictionConfidence,
                             sortedSummary = summary.toMap(),
                             availableRamMb = getAvailableRamMb()
                         )
@@ -658,8 +733,18 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
 
                     // Milestone logging (log first 5, then every 25 images to avoid log array bloat)
                     if (index < 5 || (index + 1) % 25 == 0 || index == totalCount - 1) {
-                        val pct = String.format(Locale.US, "%.1f%%", prediction.confidence * 100)
-                        addLog("✅ [${index + 1}/$totalCount] ${item.name} ➔ '$safeCategoryName' ($pct)")
+                        val pct = String.format(Locale.US, "%.1f%%", predictionConfidence * 100)
+                        if (isFaceModel) {
+                            if (rawLabel == "Unknown Person") {
+                                addLog("👤 [${index + 1}/$totalCount] ${item.name} ➔ Unrecognized Face ($pct) ➔ /$safeCategoryName")
+                            } else if (rawLabel == "No Face Detected") {
+                                addLog("📁 [${index + 1}/$totalCount] ${item.name} ➔ No Face Detected ➔ /$safeCategoryName")
+                            } else {
+                                addLog("✅ [${index + 1}/$totalCount] ${item.name} ➔ '$safeCategoryName' ($pct)")
+                            }
+                        } else {
+                            addLog("✅ [${index + 1}/$totalCount] ${item.name} ➔ '$safeCategoryName' ($pct)")
+                        }
                     }
                 }
 
@@ -686,6 +771,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                 )
             } finally {
                 featureExtractor?.close()
+                faceEngine?.close()
                 releaseWakeLock()
             }
         }
