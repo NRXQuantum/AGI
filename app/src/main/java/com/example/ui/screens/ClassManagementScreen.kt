@@ -2,8 +2,6 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -11,8 +9,11 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.util.AppLogger
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,7 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -357,6 +357,27 @@ fun ClassManagementScreen(
             if (selectedClass != null) {
                 val samples by viewModel.getSamplesForClass(selectedClass.id).collectAsState(initial = emptyList())
 
+                var currentPage by remember(selectedClass.id) { mutableIntStateOf(0) }
+                var pageSize by remember { mutableIntStateOf(24) } // 24, 48, 96, 0 (All)
+
+                val totalCount = samples.size
+                val effectivePageSize = if (pageSize <= 0) totalCount else pageSize
+                val totalPages = if (effectivePageSize > 0) ((totalCount + effectivePageSize - 1) / effectivePageSize).coerceAtLeast(1) else 1
+                val safeCurrentPage = currentPage.coerceIn(0, totalPages - 1)
+
+                val paginatedSamples = remember(samples, safeCurrentPage, pageSize) {
+                    if (pageSize > 0 && totalCount > pageSize) {
+                        val start = safeCurrentPage * pageSize
+                        val end = minOf(start + pageSize, totalCount)
+                        samples.subList(start, end)
+                    } else {
+                        samples
+                    }
+                }
+
+                val startItemIndex = if (totalCount == 0) 0 else (safeCurrentPage * effectivePageSize + 1)
+                val endItemIndex = minOf((safeCurrentPage * effectivePageSize) + paginatedSamples.size, totalCount)
+
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -414,92 +435,176 @@ fun ClassManagementScreen(
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                .padding(bottom = 8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
                             ) {
-                                if (isSelectMode) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Checkbox(
-                                            checked = selectedSampleIds.size == samples.size && samples.isNotEmpty(),
-                                            onCheckedChange = { checked ->
-                                                selectedSampleIds = if (checked) samples.map { it.id }.toSet() else emptySet()
-                                            }
-                                        )
-                                        Text(
-                                            text = "${selectedSampleIds.size} selected",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                                        )
-                                    }
-
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        if (selectedSampleIds.isNotEmpty()) {
-                                            OutlinedButton(
-                                                onClick = {
-                                                    viewModel.deleteSamplesBatch(selectedSampleIds.toList())
-                                                    selectedSampleIds = emptySet()
-                                                    isSelectMode = false
-                                                    Toast.makeText(context, "Deleted selected samples", Toast.LENGTH_SHORT).show()
-                                                },
-                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                                            ) {
-                                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text("Delete (${selectedSampleIds.size})", fontSize = 12.sp)
-                                            }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isSelectMode) {
+                                        val isCurrentPageAllSelected = paginatedSamples.isNotEmpty() && paginatedSamples.all { selectedSampleIds.contains(it.id) }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(
+                                                checked = isCurrentPageAllSelected,
+                                                onCheckedChange = { checked ->
+                                                    val pageIds = paginatedSamples.map { it.id }.toSet()
+                                                    selectedSampleIds = if (checked) {
+                                                        selectedSampleIds + pageIds
+                                                    } else {
+                                                        selectedSampleIds - pageIds
+                                                    }
+                                                }
+                                            )
+                                            Text(
+                                                text = "${selectedSampleIds.size} selected",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                            )
                                         }
 
-                                        TextButton(
-                                            onClick = {
-                                                isSelectMode = false
-                                                selectedSampleIds = emptySet()
-                                            }
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("Cancel", fontSize = 12.sp)
+                                            if (totalCount > paginatedSamples.size) {
+                                                TextButton(
+                                                    onClick = {
+                                                        selectedSampleIds = if (selectedSampleIds.size == totalCount) emptySet() else samples.map { it.id }.toSet()
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text(
+                                                        if (selectedSampleIds.size == totalCount) "Clear All" else "Select All ($totalCount)",
+                                                        fontSize = 11.sp
+                                                    )
+                                                }
+                                            }
+
+                                            if (selectedSampleIds.isNotEmpty()) {
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        viewModel.deleteSamplesBatch(selectedSampleIds.toList())
+                                                        selectedSampleIds = emptySet()
+                                                        isSelectMode = false
+                                                        Toast.makeText(context, "Deleted selected samples", Toast.LENGTH_SHORT).show()
+                                                    },
+                                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("Delete (${selectedSampleIds.size})", fontSize = 12.sp)
+                                                }
+                                            }
+
+                                            TextButton(
+                                                onClick = {
+                                                    isSelectMode = false
+                                                    selectedSampleIds = emptySet()
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                Text("Cancel", fontSize = 12.sp)
+                                            }
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.PhotoLibrary,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "Dataset ($totalCount items)",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                            )
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = { isSelectMode = true },
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
+                                            Icon(Icons.Default.Checklist, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Select Batch", fontSize = 12.sp)
                                         }
                                     }
-                                } else {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            Icons.Default.Label,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "Data Labeling (${samples.size} items)",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                        )
-                                    }
+                                }
 
-                                    OutlinedButton(
-                                        onClick = { isSelectMode = true },
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                // Pagination Info & Page Size Options
+                                if (totalCount > 12) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.Checklist, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Select Batch", fontSize = 12.sp)
+                                        Text(
+                                            text = if (pageSize > 0 && totalCount > pageSize) {
+                                                "Showing $startItemIndex–$endItemIndex of $totalCount items"
+                                            } else {
+                                                "Showing all $totalCount items"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Per page:",
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            listOf(24, 48, 96, 0).forEach { sizeOption ->
+                                                val isSelected = pageSize == sizeOption
+                                                Surface(
+                                                    onClick = {
+                                                        pageSize = sizeOption
+                                                        currentPage = 0
+                                                    },
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                                    border = BorderStroke(
+                                                        1.dp,
+                                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                                    )
+                                                ) {
+                                                    Text(
+                                                        text = if (sizeOption == 0) "All" else "$sizeOption",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
 
+                        // Grid of Images (paginated to keep phone ultra fast and lag-free)
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 105.dp),
+                            columns = GridCells.Adaptive(minSize = 100.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(bottom = 24.dp)
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(bottom = 8.dp)
                         ) {
-                            items(samples, key = { it.id }) { sample ->
+                            items(paginatedSamples, key = { it.id }) { sample ->
                                 ImageSampleGridTile(
                                     sample = sample,
                                     isSelectMode = isSelectMode,
@@ -514,6 +619,91 @@ fun ClassManagementScreen(
                                     onClickPreview = { previewSample = sample },
                                     onDelete = { viewModel.deleteSample(sample.id) }
                                 )
+                            }
+                        }
+
+                        // Bottom Pagination Controls (when dataset is split into multiple pages)
+                        if (totalPages > 1) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        IconButton(
+                                            onClick = { currentPage = 0 },
+                                            enabled = safeCurrentPage > 0,
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.FirstPage,
+                                                contentDescription = "First Page",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                        OutlinedButton(
+                                            onClick = { currentPage = (safeCurrentPage - 1).coerceAtLeast(0) },
+                                            enabled = safeCurrentPage > 0,
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.ChevronLeft, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Text("Prev", fontSize = 11.sp)
+                                        }
+                                    }
+
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Page ${safeCurrentPage + 1} of $totalPages",
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        )
+                                    }
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { currentPage = (safeCurrentPage + 1).coerceAtMost(totalPages - 1) },
+                                            enabled = safeCurrentPage < totalPages - 1,
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(32.dp)
+                                        ) {
+                                            Text("Next", fontSize = 11.sp)
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        }
+                                        IconButton(
+                                            onClick = { currentPage = totalPages - 1 },
+                                            enabled = safeCurrentPage < totalPages - 1,
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.LastPage,
+                                                contentDescription = "Last Page",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -588,9 +778,6 @@ fun ClassManagementScreen(
     // High-Resolution Sample Inspection Preview Dialog
     if (previewSample != null) {
         val file = remember(previewSample!!.imagePath) { File(previewSample!!.imagePath) }
-        val bitmap = remember(previewSample!!.imagePath) {
-            if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
-        }
 
         AlertDialog(
             onDismissRequest = { previewSample = null },
@@ -611,9 +798,12 @@ fun ClassManagementScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
+                    if (file.exists()) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(file)
+                                .crossfade(true)
+                                .build(),
                             contentDescription = "Full Sample View",
                             contentScale = ContentScale.Fit,
                             modifier = Modifier
@@ -623,7 +813,7 @@ fun ClassManagementScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Resolution: ${bitmap.width} x ${bitmap.height} px",
+                            text = file.name,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -851,11 +1041,7 @@ fun ImageSampleGridTile(
     onDelete: () -> Unit
 ) {
     val file = remember(sample.imagePath) { File(sample.imagePath) }
-    val bitmap = remember(sample.imagePath) {
-        if (file.exists()) {
-            BitmapFactory.decodeFile(file.absolutePath)
-        } else null
-    }
+    val context = LocalContext.current
 
     Box(
         modifier = Modifier
@@ -875,10 +1061,14 @@ fun ImageSampleGridTile(
                 }
             }
     ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = null,
+        if (file.exists()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(file)
+                    .crossfade(true)
+                    .size(240, 240)
+                    .build(),
+                contentDescription = "Sample Image",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
