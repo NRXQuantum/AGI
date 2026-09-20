@@ -2,6 +2,7 @@ package com.example.ml
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PointF
 import android.media.FaceDetector
 import com.example.data.db.AppDatabase
@@ -138,26 +139,29 @@ class FaceRecognitionEngine(private val context: Context) {
                         val eyeDistance = face.eyesDistance()
                         val confidence = face.confidence()
 
-                        if (eyeDistance >= 10f && confidence >= 0.38f) {
-                            // Anthropometric facial proportions:
-                            // Width: ~2.4x eye distance
-                            // Forehead to Chin: ~3.2x eye distance
-                            val boxW = eyeDistance * 2.5f
-                            val boxH = eyeDistance * 3.3f
-                            val leftPx = midPoint.x - (boxW * 0.5f)
-                            val topPx = midPoint.y - (boxH * 0.44f)
+                        if (eyeDistance >= 14f && confidence >= 0.50f) {
+                            // Midpoint boundary sanity check (eyes must not be right at the border)
+                            if (midPoint.x in (targetW * 0.05f)..(targetW * 0.95f) &&
+                                midPoint.y in (targetH * 0.05f)..(targetH * 0.95f)
+                            ) {
+                                // Anthropometric facial proportions:
+                                // Width: ~2.5x eye distance
+                                // Forehead to Chin: ~3.3x eye distance
+                                val boxW = eyeDistance * 2.5f
+                                val boxH = eyeDistance * 3.3f
+                                val leftPx = midPoint.x - (boxW * 0.5f)
+                                val topPx = midPoint.y - (boxH * 0.44f)
 
-                            val leftNorm = (leftPx / targetW).coerceIn(0f, 0.95f)
-                            val topNorm = (topPx / targetH).coerceIn(0f, 0.95f)
-                            val rightNorm = ((leftPx + boxW) / targetW).coerceIn(leftNorm + 0.05f, 1f)
-                            val bottomNorm = ((topPx + boxH) / targetH).coerceIn(topNorm + 0.05f, 1f)
+                                val leftNorm = (leftPx / targetW).coerceIn(0f, 0.95f)
+                                val topNorm = (topPx / targetH).coerceIn(0f, 0.95f)
+                                val rightNorm = ((leftPx + boxW) / targetW).coerceIn(leftNorm + 0.05f, 1f)
+                                val bottomNorm = ((topPx + boxH) / targetH).coerceIn(topNorm + 0.05f, 1f)
 
-                            val eyeMidXNorm = (midPoint.x / targetW).coerceIn(0f, 1f)
-                            val eyeMidYNorm = (midPoint.y / targetH).coerceIn(0f, 1f)
-                            val eyeDistNorm = (eyeDistance / targetW).coerceIn(0.01f, 1f)
+                                val eyeMidXNorm = (midPoint.x / targetW).coerceIn(0f, 1f)
+                                val eyeMidYNorm = (midPoint.y / targetH).coerceIn(0f, 1f)
+                                val eyeDistNorm = (eyeDistance / targetW).coerceIn(0.01f, 1f)
 
-                            detectedBoxes.add(
-                                FaceBoundingBox(
+                                val candidate = FaceBoundingBox(
                                     leftNorm = leftNorm,
                                     topNorm = topNorm,
                                     rightNorm = rightNorm,
@@ -167,7 +171,12 @@ class FaceRecognitionEngine(private val context: Context) {
                                     eyeMidYNorm = eyeMidYNorm,
                                     eyeDistanceNorm = eyeDistNorm
                                 )
-                            )
+
+                                // Biometric texture & luminance validation: rejects flat app logos, icons, screenshots, and vector graphics
+                                if (isBiometricFaceCandidate(bitmap, candidate)) {
+                                    detectedBoxes.add(candidate)
+                                }
+                            }
                         }
                     }
 
@@ -180,14 +189,6 @@ class FaceRecognitionEngine(private val context: Context) {
             // If we found valid faces at this pyramid level, break early to prevent redundant passes
             if (detectedBoxes.isNotEmpty()) {
                 break
-            }
-        }
-
-        // Fallback for extreme close-ups or partial portraits where eyes are very close to edges
-        if (detectedBoxes.isEmpty()) {
-            val fallbackBox = detectProminentFacialRegion(bitmap)
-            if (fallbackBox != null) {
-                detectedBoxes.add(fallbackBox)
             }
         }
 
@@ -369,54 +370,94 @@ class FaceRecognitionEngine(private val context: Context) {
     }
 
     /**
-     * Fallback facial localization scanning for skin-tone clustering and vertical eye/mouth symmetry.
+     * Biometric sanity check for candidate face crops:
+     * Rejects non-face artifacts, app logos, flat icons, screenshots, and solid backgrounds.
+     * Real human faces have:
+     * 1. Natural luminance variance (eyes, brows, nose shadow, lips, hairline). Flat icons have near-zero variance.
+     * 2. Non-extreme color saturation (logos often use 100% pure RGB saturated pigments).
+     * 3. Valid aspect ratio (height:width between 0.90 and 1.90).
      */
-    private fun detectProminentFacialRegion(bitmap: Bitmap): FaceBoundingBox? {
-        val w = bitmap.width
-        val h = bitmap.height
-        val scaled = Bitmap.createScaledBitmap(bitmap, 120, 120, false)
+    private fun isBiometricFaceCandidate(fullImage: Bitmap, box: FaceBoundingBox): Boolean {
+        val w = fullImage.width
+        val h = fullImage.height
+        val boxW = ((box.rightNorm - box.leftNorm) * w).toInt()
+        val boxH = ((box.bottomNorm - box.topNorm) * h).toInt()
+        if (boxW < 20 || boxH < 20) return false
 
-        var skinPixelCount = 0
-        var sumX = 0L
-        var sumY = 0L
-        var minX = 120
-        var maxX = 0
-        var minY = 120
-        var maxY = 0
+        // Aspect ratio check: human face bounding box is slightly taller than wide
+        val ratio = boxH.toFloat() / boxW.toFloat()
+        if (ratio !in 0.90f..1.90f) return false
 
-        for (y in 0 until 120) {
-            for (x in 0 until 120) {
-                val p = scaled.getPixel(x, y)
-                val r = (p shr 16) and 0xFF
-                val g = (p shr 8) and 0xFF
-                val b = p and 0xFF
+        val cropX = (box.leftNorm * w).toInt().coerceIn(0, w - 1)
+        val cropY = (box.topNorm * h).toInt().coerceIn(0, h - 1)
+        val validW = boxW.coerceIn(16, w - cropX)
+        val validH = boxH.coerceIn(16, h - cropY)
 
-                // YCbCr / RGB Skin tone heuristic: R > G > B and R-G > 15
-                if (r > 60 && g > 40 && b > 20 && r > g && g > b && (r - g) >= 12 && (r - b) >= 20) {
-                    skinPixelCount++
-                    sumX += x
-                    sumY += y
-                    minX = min(minX, x)
-                    maxX = max(maxX, x)
-                    minY = min(minY, y)
-                    maxY = max(maxY, y)
+        val cropBmp = try {
+            Bitmap.createBitmap(fullImage, cropX, cropY, validW, validH)
+        } catch (_: Throwable) {
+            return false
+        }
+
+        val thumb = Bitmap.createScaledBitmap(cropBmp, 32, 32, false)
+        if (cropBmp != fullImage) cropBmp.recycle()
+
+        var sumLum = 0.0
+        var sumLumSq = 0.0
+        var highSaturationCount = 0
+        val totalPixels = 32 * 32
+
+        val hsv = FloatArray(3)
+        for (y in 0 until 32) {
+            for (x in 0 until 32) {
+                val pixel = thumb.getPixel(x, y)
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+
+                // Standard luminance (ITU-R BT.601)
+                val lum = 0.299 * r + 0.587 * g + 0.114 * b
+                sumLum += lum
+                sumLumSq += lum * lum
+
+                Color.colorToHSV(pixel, hsv)
+                // App logos / graphic badges often have extreme saturation (> 0.88) across large areas
+                if (hsv[1] > 0.88f && hsv[2] > 0.40f) {
+                    highSaturationCount++
                 }
             }
         }
+        thumb.recycle()
 
-        scaled.recycle()
+        val meanLum = sumLum / totalPixels
+        val variance = (sumLumSq / totalPixels) - (meanLum * meanLum)
+        val stdDev = if (variance > 0) sqrt(variance) else 0.0
 
-        if (skinPixelCount > 350 && (maxX - minX) > 25 && (maxY - minY) > 25) {
-            val padX = ((maxX - minX) * 0.15f).toInt()
-            val padY = ((maxY - minY) * 0.20f).toInt()
-            val l = ((minX - padX).coerceAtLeast(0)) / 120f
-            val t = ((minY - padY).coerceAtLeast(0)) / 120f
-            val r = ((maxX + padX).coerceAtMost(120)) / 120f
-            val b = ((maxY + padY).coerceAtMost(120)) / 120f
-            return FaceBoundingBox(l, t, r, b, confidence = 0.75f)
+        // Real human faces have rich tonal shading (eyes, lips, nose, skin: stdDev typically > 20.0)
+        // Flat app icons, solid colors, UI cards have stdDev < 15.0
+        if (stdDev < 15.0) {
+            return false
         }
 
-        return null
+        // If over 55% of the crop is hypersaturated neon/primary color, it's a graphic/logo, not human skin
+        if (highSaturationCount.toFloat() / totalPixels > 0.55f) {
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * Calibrates cosine similarity in high-dimensional embedding space to user-facing recognition confidence percentage.
+     * Prevents false matches by ensuring low/unrelated cosine similarities (< 0.58) map to low confidence (< 50%).
+     */
+    fun calculateBiometricConfidence(cosineSimilarity: Float): Float {
+        return when {
+            cosineSimilarity <= 0.35f -> 0.05f
+            cosineSimilarity < 0.60f -> 0.05f + ((cosineSimilarity - 0.35f) / 0.25f) * 0.45f // 0.05 to 0.50
+            cosineSimilarity < 0.78f -> 0.50f + ((cosineSimilarity - 0.60f) / 0.18f) * 0.35f // 0.50 to 0.85
+            else -> (0.85f + ((cosineSimilarity - 0.78f) / 0.22f) * 0.14f).coerceAtMost(0.99f) // 0.85 to 0.99
+        }.coerceIn(0f, 0.99f)
     }
 
     /**
@@ -464,22 +505,25 @@ class FaceRecognitionEngine(private val context: Context) {
 
         // 1. Run real neural-network YOLOX-Nano Object Detector filtering exclusively for "Person" class
         try {
-            val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.20f)
+            val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.48f)
             for (det in detections) {
                 if (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true) || det.label.equals("Human", ignoreCase = true)) {
                     val boxW = det.rightNorm - det.leftNorm
                     val boxH = det.bottomNorm - det.topNorm
-                    // Validate minimum realistic human box proportions
-                    if (boxW >= 0.05f && boxH >= 0.08f) {
-                        candidateBoxes.add(
-                            FaceBoundingBox(
-                                leftNorm = det.leftNorm.coerceIn(0f, 0.95f),
-                                topNorm = det.topNorm.coerceIn(0f, 0.95f),
-                                rightNorm = det.rightNorm.coerceIn(det.leftNorm + 0.05f, 1f),
-                                bottomNorm = det.bottomNorm.coerceIn(det.topNorm + 0.08f, 1f),
-                                confidence = det.score
+                    // Validate minimum realistic human box proportions (reject microscopic icons/buttons and square logos)
+                    if (boxW in 0.08f..0.95f && boxH in 0.15f..0.98f && det.score >= 0.48f) {
+                        val statureRatio = boxH / boxW
+                        if (statureRatio >= 0.90f) {
+                            candidateBoxes.add(
+                                FaceBoundingBox(
+                                    leftNorm = det.leftNorm.coerceIn(0f, 0.95f),
+                                    topNorm = det.topNorm.coerceIn(0f, 0.95f),
+                                    rightNorm = det.rightNorm.coerceIn(det.leftNorm + 0.05f, 1f),
+                                    bottomNorm = det.bottomNorm.coerceIn(det.topNorm + 0.08f, 1f),
+                                    confidence = det.score
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }
@@ -722,8 +766,10 @@ class FaceRecognitionEngine(private val context: Context) {
                 }
             }
 
-            val confidence = ((bestScore + 1f) * 0.5f).coerceIn(0f, 1f)
-            val isRecognized = (bestPerson != null && confidence >= matchThreshold)
+            // Strict biometric threshold: cosine similarity must be at least 0.58 to consider a genuine face match
+            val effectiveFaceThreshold = maxOf(0.58f, matchThreshold)
+            val isRecognized = (bestPerson != null && bestScore >= effectiveFaceThreshold)
+            val confidence = calculateBiometricConfidence(bestScore)
             val name = if (isRecognized) {
                 bestPerson!!.name
             } else {
@@ -777,8 +823,10 @@ class FaceRecognitionEngine(private val context: Context) {
                 }
             }
 
-            val confidence = ((bestScore + 1f) * 0.5f).coerceIn(0f, 1f)
-            val isRecognized = (bestPerson != null && confidence >= (matchThreshold * 0.95f))
+            // Strict biometric threshold: cosine similarity must be at least 0.62 for body match
+            val effectiveBodyThreshold = maxOf(0.62f, matchThreshold * 1.05f)
+            val isRecognized = (bestPerson != null && bestScore >= effectiveBodyThreshold)
+            val confidence = calculateBiometricConfidence(bestScore)
             val name = if (isRecognized) {
                 bestPerson!!.name
             } else {
