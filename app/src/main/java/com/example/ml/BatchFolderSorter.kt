@@ -585,18 +585,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                             }
                         } else {
                             val topPerson = identified[0]
-                            if (topPerson.personName == "Unknown Person") {
-                                if (enrolledPersons.size == 1) {
-                                    rawLabel = enrolledPersons[0].name
-                                    predictionConfidence = topPerson.confidence
-                                } else {
-                                    rawLabel = "Unknown Person"
-                                    predictionConfidence = topPerson.confidence
-                                }
-                            } else {
-                                rawLabel = topPerson.personName
-                                predictionConfidence = topPerson.confidence
-                            }
+                            rawLabel = topPerson.personName
+                            predictionConfidence = topPerson.confidence
                         }
                     } else {
                         // Standard Image Classification check for face / human filter if enabled

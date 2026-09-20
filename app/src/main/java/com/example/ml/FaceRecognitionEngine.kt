@@ -105,9 +105,10 @@ class FaceRecognitionEngine(private val context: Context) {
         val detectedBoxes = mutableListOf<FaceBoundingBox>()
         val maxDim = max(width, height)
 
-        // Multi-scale pyramid: test full/high res, medium res, and normalized downscales
+        // Multi-scale pyramid: calculate scales without crushing narrow dimensions in tall/wide photos
         val scales = when {
-            maxDim > 1280 -> listOf(1080f / maxDim, 720f / maxDim, 480f / maxDim)
+            maxDim > 2048 -> listOf(1600f / maxDim, 1080f / maxDim, 720f / maxDim)
+            maxDim > 1280 -> listOf(1.0f, 1080f / maxDim, 720f / maxDim)
             maxDim > 640 -> listOf(1.0f, 640f / maxDim, 480f / maxDim)
             else -> listOf(1.0f)
         }
@@ -139,10 +140,10 @@ class FaceRecognitionEngine(private val context: Context) {
                         val eyeDistance = face.eyesDistance()
                         val confidence = face.confidence()
 
-                        // Lenient eye distance & confidence allows beauty filters, glasses, and distant faces
-                        if (eyeDistance >= 11f && confidence >= 0.38f) {
-                            if (midPoint.x in (targetW * 0.03f)..(targetW * 0.97f) &&
-                                midPoint.y in (targetH * 0.03f)..(targetH * 0.97f)
+                        // Android FaceDetector eyeDistance >= 5.5f allows distant faces, narrow vertical crops, and beauty filters
+                        if (eyeDistance >= 5.5f && confidence >= 0.30f) {
+                            if (midPoint.x in (targetW * 0.02f)..(targetW * 0.98f) &&
+                                midPoint.y in (targetH * 0.02f)..(targetH * 0.98f)
                             ) {
                                 // Anthropometric facial proportions
                                 val boxW = eyeDistance * 2.5f
@@ -152,12 +153,12 @@ class FaceRecognitionEngine(private val context: Context) {
 
                                 val leftNorm = (leftPx / targetW).coerceIn(0f, 0.95f)
                                 val topNorm = (topPx / targetH).coerceIn(0f, 0.95f)
-                                val rightNorm = ((leftPx + boxW) / targetW).coerceIn(leftNorm + 0.05f, 1f)
-                                val bottomNorm = ((topPx + boxH) / targetH).coerceIn(topNorm + 0.05f, 1f)
+                                val rightNorm = ((leftPx + boxW) / targetW).coerceIn(leftNorm + 0.04f, 1f)
+                                val bottomNorm = ((topPx + boxH) / targetH).coerceIn(topNorm + 0.04f, 1f)
 
                                 val eyeMidXNorm = (midPoint.x / targetW).coerceIn(0f, 1f)
                                 val eyeMidYNorm = (midPoint.y / targetH).coerceIn(0f, 1f)
-                                val eyeDistNorm = (eyeDistance / targetW).coerceIn(0.01f, 1f)
+                                val eyeDistNorm = (eyeDistance / targetW).coerceIn(0.005f, 1f)
 
                                 val candidate = FaceBoundingBox(
                                     leftNorm = leftNorm,
@@ -187,6 +188,54 @@ class FaceRecognitionEngine(private val context: Context) {
             // If we found valid faces at this pyramid level, break early to prevent redundant passes
             if (detectedBoxes.isNotEmpty()) {
                 break
+            }
+        }
+
+        // Vertical slice scanning for extreme aspect ratio photos (e.g. 276x1152, 1114x4608 where height >= 1.7x width)
+        if (detectedBoxes.isEmpty() && height >= 1.7f * width) {
+            val sliceH = (height * 0.65f).toInt().coerceIn(32, height - 1)
+            val topCrop = try {
+                Bitmap.createBitmap(bitmap, 0, 0, width, sliceH)
+            } catch (_: Throwable) { null }
+
+            if (topCrop != null) {
+                val sliceFaces = detectFaces(topCrop, maxFaces)
+                for (sf in sliceFaces) {
+                    detectedBoxes.add(
+                        sf.copy(
+                            topNorm = sf.topNorm * 0.65f,
+                            bottomNorm = sf.bottomNorm * 0.65f,
+                            eyeMidYNorm = sf.eyeMidYNorm * 0.65f
+                        )
+                    )
+                }
+                if (topCrop != bitmap) topCrop.recycle()
+            }
+
+            // Fallback: middle vertical slice if still not detected
+            if (detectedBoxes.isEmpty()) {
+                val midStartY = (height * 0.30f).toInt()
+                val midH = (height * 0.65f).toInt().coerceAtMost(height - midStartY)
+                if (midH >= 32) {
+                    val midCrop = try {
+                        Bitmap.createBitmap(bitmap, 0, midStartY, width, midH)
+                    } catch (_: Throwable) { null }
+                    if (midCrop != null) {
+                        val midFaces = detectFaces(midCrop, maxFaces)
+                        val midStartNorm = midStartY.toFloat() / height
+                        val midHNorm = midH.toFloat() / height
+                        for (mf in midFaces) {
+                            detectedBoxes.add(
+                                mf.copy(
+                                    topNorm = midStartNorm + (mf.topNorm * midHNorm),
+                                    bottomNorm = midStartNorm + (mf.bottomNorm * midHNorm),
+                                    eyeMidYNorm = midStartNorm + (mf.eyeMidYNorm * midHNorm)
+                                )
+                            )
+                        }
+                        if (midCrop != bitmap) midCrop.recycle()
+                    }
+                }
             }
         }
 
@@ -380,7 +429,7 @@ class FaceRecognitionEngine(private val context: Context) {
         val h = fullImage.height
         val boxW = ((box.rightNorm - box.leftNorm) * w).toInt()
         val boxH = ((box.bottomNorm - box.topNorm) * h).toInt()
-        if (boxW < 20 || boxH < 20) return false
+        if (boxW < 12 || boxH < 12) return false
 
         // Aspect ratio check: human face bounding box is slightly taller than wide, but allow partial crops / wide selfies
         val ratio = boxH.toFloat() / boxW.toFloat()
@@ -388,8 +437,8 @@ class FaceRecognitionEngine(private val context: Context) {
 
         val cropX = (box.leftNorm * w).toInt().coerceIn(0, w - 1)
         val cropY = (box.topNorm * h).toInt().coerceIn(0, h - 1)
-        val validW = boxW.coerceIn(16, w - cropX)
-        val validH = boxH.coerceIn(16, h - cropY)
+        val validW = boxW.coerceIn(10, w - cropX)
+        val validH = boxH.coerceIn(10, h - cropY)
 
         val cropBmp = try {
             Bitmap.createBitmap(fullImage, cropX, cropY, validW, validH)
@@ -503,17 +552,17 @@ class FaceRecognitionEngine(private val context: Context) {
 
         val candidateBoxes = mutableListOf<FaceBoundingBox>()
 
-        // 1. Run real neural-network YOLOX-Nano Object Detector filtering exclusively for "Person" class
+        // 1. Run real neural-network YOLOX-Nano Object Detector filtering exclusively for genuine "Person" class
         try {
-            val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.32f)
+            val detections = tfliteDetector.detectObjects(bitmap, minScoreThreshold = 0.40f)
             for (det in detections) {
                 if (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true) || det.label.equals("Human", ignoreCase = true)) {
                     val boxW = det.rightNorm - det.leftNorm
                     val boxH = det.bottomNorm - det.topNorm
-                    // Validate realistic human box proportions (reject microscopic icons/buttons and zero-area glitches)
-                    if (boxW in 0.05f..1.0f && boxH in 0.08f..1.0f && det.score >= 0.32f) {
+                    // Validate realistic human box proportions (reject horizontal non-human objects like cars/tables and tiny artifacts)
+                    if (boxW in 0.05f..0.95f && boxH in 0.10f..0.98f && det.score >= 0.40f) {
                         val statureRatio = boxH / boxW
-                        if (statureRatio >= 0.35f) {
+                        if (statureRatio >= 0.60f) {
                             candidateBoxes.add(
                                 FaceBoundingBox(
                                     leftNorm = det.leftNorm.coerceIn(0f, 0.95f),
@@ -525,6 +574,40 @@ class FaceRecognitionEngine(private val context: Context) {
                             )
                         }
                     }
+                }
+            }
+
+            // In tall photos (e.g. 276x1152, 1114x4608), also scan the top 65% slice with YOLOX so standing people are caught with high resolution
+            if (h >= 1.7f * w && candidateBoxes.isEmpty()) {
+                val sliceH = (h * 0.65f).toInt().coerceIn(32, h - 1)
+                val topCrop = try {
+                    Bitmap.createBitmap(bitmap, 0, 0, w, sliceH)
+                } catch (_: Throwable) { null }
+                if (topCrop != null) {
+                    val topDetections = tfliteDetector.detectObjects(topCrop, minScoreThreshold = 0.40f)
+                    for (det in topDetections) {
+                        if (det.classIndex == 0 || det.label.equals("Person", ignoreCase = true) || det.label.equals("Human", ignoreCase = true)) {
+                            val boxW = det.rightNorm - det.leftNorm
+                            val boxH = det.bottomNorm - det.topNorm
+                            if (boxW in 0.05f..0.95f && boxH in 0.10f..0.98f && det.score >= 0.40f) {
+                                val statureRatio = boxH / boxW
+                                if (statureRatio >= 0.60f) {
+                                    val mappedTop = det.topNorm * 0.65f
+                                    val mappedBottom = det.bottomNorm * 0.65f
+                                    candidateBoxes.add(
+                                        FaceBoundingBox(
+                                            leftNorm = det.leftNorm.coerceIn(0f, 0.95f),
+                                            topNorm = mappedTop.coerceIn(0f, 0.95f),
+                                            rightNorm = det.rightNorm.coerceIn(det.leftNorm + 0.05f, 1f),
+                                            bottomNorm = mappedBottom.coerceIn(mappedTop + 0.05f, 1f),
+                                            confidence = det.score
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (topCrop != bitmap) topCrop.recycle()
                 }
             }
         } catch (_: Throwable) {}
@@ -571,16 +654,7 @@ class FaceRecognitionEngine(private val context: Context) {
             }
         }
 
-        // 3. Fallback: If neither YOLOX nor FaceDetector found a person, run ML Kit Selfie Segmentation
-        // (Detects human bodies, side-profiles, turned poses, occluded faces, beauty filters, sunglasses, and gesture poses)
-        if (candidateBoxes.isEmpty()) {
-            try {
-                val segmenterBoxes = bodySegmenter.detectHumanBoundingBoxesSync(bitmap)
-                candidateBoxes.addAll(segmenterBoxes)
-            } catch (_: Throwable) {}
-        }
-
-        // 4. Deduplicate / Non-Maximum Suppression (IoU) to eliminate double counting
+        // 3. Deduplicate / Non-Maximum Suppression (IoU) to eliminate double counting
         val deduplicated = nmsDeduplicate(candidateBoxes, iouThreshold = 0.38f)
         return deduplicated.take(maxBodies)
     }
@@ -702,34 +776,6 @@ class FaceRecognitionEngine(private val context: Context) {
         val faces = detectFaces(sceneBitmap, maxFaces = maxPersons).toMutableList()
         val bodies = detectHumanBodies(sceneBitmap, maxBodies = maxPersons, precomputedFaces = faces)
 
-        // 1.5. If hardware FaceDetector missed face (e.g. glasses, sunglasses, beauty filters, head tilt, side profile, or partial cut),
-        // synthesize head/face candidates from the detected human bodies and validate with isBiometricFaceCandidate:
-        if (faces.isEmpty() && bodies.isNotEmpty()) {
-            for (bBox in bodies) {
-                val bW = bBox.rightNorm - bBox.leftNorm
-                val bH = bBox.bottomNorm - bBox.topNorm
-                val (headFractionH, headFractionW) = when {
-                    bH / bW > 1.8f -> Pair(0.25f, 0.55f)
-                    bH / bW > 1.1f -> Pair(0.38f, 0.68f)
-                    else -> Pair(0.55f, 0.85f)
-                }
-                val estHeadH = (bH * headFractionH).coerceIn(0.06f, 0.95f)
-                val estHeadW = (bW * headFractionW).coerceIn(0.06f, 0.95f)
-                val estHeadLeft = (bBox.leftNorm + (bW - estHeadW) * 0.5f).coerceIn(0f, 0.92f)
-                val estHeadTop = bBox.topNorm.coerceIn(0f, 0.92f)
-                val estBox = FaceBoundingBox(
-                    leftNorm = estHeadLeft,
-                    topNorm = estHeadTop,
-                    rightNorm = (estHeadLeft + estHeadW).coerceAtMost(1f),
-                    bottomNorm = (estHeadTop + estHeadH).coerceAtMost(1f),
-                    confidence = bBox.confidence
-                )
-                if (isBiometricFaceCandidate(sceneBitmap, estBox)) {
-                    faces.add(estBox)
-                }
-            }
-        }
-
         // If neither face nor person body was found by any engine, scene has no humans!
         if (faces.isEmpty() && bodies.isEmpty()) {
             return emptyList()
@@ -803,9 +849,9 @@ class FaceRecognitionEngine(private val context: Context) {
                 }
             }
 
-            val effectiveFaceThreshold = if (enrolledPersons.size == 1) 0.28f else matchThreshold.coerceIn(0.35f, 0.75f)
-            val isRecognized = (bestPerson != null && (bestScore >= effectiveFaceThreshold || enrolledPersons.size == 1))
-            val confidence = calculateBiometricConfidence(bestScore).coerceAtLeast(if (enrolledPersons.size == 1) 0.65f else 0.40f)
+            val effectiveFaceThreshold = maxOf(0.40f, matchThreshold)
+            val isRecognized = (bestPerson != null && bestScore >= effectiveFaceThreshold)
+            val confidence = calculateBiometricConfidence(bestScore)
             val name = if (isRecognized) {
                 bestPerson!!.name
             } else {
@@ -880,10 +926,10 @@ class FaceRecognitionEngine(private val context: Context) {
                 }
             }
 
-            // Estimate person class: If single enrolled person or similarity meets threshold, recognize them!
-            val effectiveBodyThreshold = if (enrolledPersons.size == 1) 0.25f else (matchThreshold * 0.75f).coerceIn(0.28f, 0.55f)
-            val isRecognized = (bestPerson != null && (bestScore >= effectiveBodyThreshold || enrolledPersons.size == 1))
-            val confidence = calculateBiometricConfidence(bestScore).coerceAtLeast(if (enrolledPersons.size == 1) 0.60f else 0.45f)
+            // Estimate person class: require genuine biometric/appearance match above threshold
+            val effectiveBodyThreshold = maxOf(0.45f, matchThreshold)
+            val isRecognized = (bestPerson != null && bestScore >= effectiveBodyThreshold)
+            val confidence = calculateBiometricConfidence(bestScore)
             val name = if (isRecognized) {
                 bestPerson!!.name
             } else {
