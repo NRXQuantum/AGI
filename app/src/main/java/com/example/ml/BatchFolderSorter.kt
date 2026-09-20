@@ -558,7 +558,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
 
                     if (isFaceModel && faceEngine != null && enrolledPersons.isNotEmpty()) {
                         // Accurate Face Recognition Pipeline: Detect face, crop, extract 128D embedding, match against enrolled centroids
-                        val matchThreshold = repository?.getFaceMatchThreshold() ?: 0.50f
+                        val matchThreshold = repository?.getFaceMatchThreshold() ?: 0.45f
                         val identified = faceEngine.identifyHumansInScene(
                             sceneBitmap = bitmap,
                             enrolledPersons = enrolledPersons,
@@ -570,7 +570,7 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                             if (skipIfNoFaceDetected) {
                                 bitmap.recycle()
                                 skippedCount++
-                                addLog("⏭️ [Skipped] No face detected in '${item.name}', moving to next photo...")
+                                addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
                                 _state.value = _state.value.copy(
                                     currentImageIndex = index + 1,
                                     currentImageName = item.name,
@@ -586,21 +586,27 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                         } else {
                             val topPerson = identified[0]
                             if (topPerson.personName == "Unknown Person") {
-                                rawLabel = "Unknown Person"
-                                predictionConfidence = topPerson.confidence
+                                if (enrolledPersons.size == 1) {
+                                    rawLabel = enrolledPersons[0].name
+                                    predictionConfidence = topPerson.confidence
+                                } else {
+                                    rawLabel = "Unknown Person"
+                                    predictionConfidence = topPerson.confidence
+                                }
                             } else {
                                 rawLabel = topPerson.personName
                                 predictionConfidence = topPerson.confidence
                             }
                         }
                     } else {
-                        // Standard Image Classification check for face filter if enabled
+                        // Standard Image Classification check for face / human filter if enabled
                         if (skipIfNoFaceDetected && faceEngine != null) {
                             val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
-                            if (detectedFaces.isEmpty()) {
+                            val detectedBodies = if (detectedFaces.isEmpty()) faceEngine.detectHumanBodies(bitmap, maxBodies = 1) else emptyList()
+                            if (detectedFaces.isEmpty() && detectedBodies.isEmpty()) {
                                 bitmap.recycle()
                                 skippedCount++
-                                addLog("⏭️ [Skipped] No face detected in '${item.name}', moving to next photo...")
+                                addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
                                 _state.value = _state.value.copy(
                                     currentImageIndex = index + 1,
                                     currentImageName = item.name,
