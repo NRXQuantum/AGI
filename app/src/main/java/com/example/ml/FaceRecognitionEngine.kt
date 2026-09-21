@@ -6,6 +6,12 @@ import android.graphics.Color
 import android.graphics.PointF
 import android.media.FaceDetector
 import com.example.util.ImageUtils
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.face.FaceLandmark
+import java.util.concurrent.TimeUnit
 import com.example.data.db.AppDatabase
 import com.example.data.db.ClassificationClassEntity
 import com.example.data.db.ImageSampleEntity
@@ -89,12 +95,139 @@ class FaceRecognitionEngine(private val context: Context) {
     private val tfliteDetector: TFLiteObjectDetector by lazy {
         TFLiteObjectDetector(context)
     }
+    private val bodySegmenter: PersonBodySegmenter by lazy {
+        PersonBodySegmenter(isStreamMode = false)
+    }
+
+    private val mlKitFaceDetector by lazy {
+        val options = FaceDetectorOptions.Builder()
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+            .setMinFaceSize(0.05f)
+            .build()
+        FaceDetection.getClient(options)
+    }
 
     /**
-     * High-Precision Face Detector powered by Multi-Scale Pyramid Android FaceDetector.
-     * Completely local, offline, and independent of Google Play Services (GMS-free).
+     * High-Precision Face Detector powered by Google ML Kit Neural Network with
+     * multi-orientation fallback and legacy pyramid detection.
      */
     fun detectFaces(bitmap: Bitmap, maxFaces: Int = 10): List<FaceBoundingBox> {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width < 32 || height < 32) return emptyList()
+
+        // 1. Primary Neural Face Detection (Google ML Kit)
+        try {
+            val inputImage = InputImage.fromBitmap(bitmap, 0)
+            val task = mlKitFaceDetector.process(inputImage)
+            val mlFaces = Tasks.await(task, 3000, TimeUnit.MILLISECONDS)
+            if (mlFaces.isNotEmpty()) {
+                val detected = mutableListOf<FaceBoundingBox>()
+                for (face in mlFaces.take(maxFaces)) {
+                    val box = face.boundingBox
+                    val leftNorm = (box.left.toFloat() / width).coerceIn(0f, 0.95f)
+                    val topNorm = (box.top.toFloat() / height).coerceIn(0f, 0.95f)
+                    val rightNorm = (box.right.toFloat() / width).coerceIn(leftNorm + 0.03f, 1f)
+                    val bottomNorm = (box.bottom.toFloat() / height).coerceIn(topNorm + 0.03f, 1f)
+
+                    val leftEye = face.getLandmark(FaceLandmark.LEFT_EYE)?.position
+                    val rightEye = face.getLandmark(FaceLandmark.RIGHT_EYE)?.position
+
+                    val eyeMidXNorm = if (leftEye != null && rightEye != null) {
+                        ((leftEye.x + rightEye.x) * 0.5f / width).coerceIn(0f, 1f)
+                    } else {
+                        (leftNorm + rightNorm) * 0.5f
+                    }
+                    val eyeMidYNorm = if (leftEye != null && rightEye != null) {
+                        ((leftEye.y + rightEye.y) * 0.5f / height).coerceIn(0f, 1f)
+                    } else {
+                        topNorm + (bottomNorm - topNorm) * 0.35f
+                    }
+                    val eyeDistNorm = if (leftEye != null && rightEye != null) {
+                        kotlin.math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y) / width
+                    } else {
+                        (rightNorm - leftNorm) * 0.38f
+                    }
+
+                    detected.add(
+                        FaceBoundingBox(
+                            leftNorm = leftNorm,
+                            topNorm = topNorm,
+                            rightNorm = rightNorm,
+                            bottomNorm = bottomNorm,
+                            confidence = 0.95f,
+                            eyeMidXNorm = eyeMidXNorm,
+                            eyeMidYNorm = eyeMidYNorm,
+                            eyeDistanceNorm = eyeDistNorm
+                        )
+                    )
+                }
+                if (detected.isNotEmpty()) {
+                    return nmsDeduplicate(detected, iouThreshold = 0.35f)
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // 2. Multi-Orientation Check (For images taken sideways without EXIF tags)
+        val rotations = listOf(90, 270, 180)
+        for (rotation in rotations) {
+            try {
+                val inputRot = InputImage.fromBitmap(bitmap, rotation)
+                val rotTask = mlKitFaceDetector.process(inputRot)
+                val rotFaces = Tasks.await(rotTask, 1200, TimeUnit.MILLISECONDS)
+                if (rotFaces.isNotEmpty()) {
+                    val rotW = if (rotation == 90 || rotation == 270) height else width
+                    val rotH = if (rotation == 90 || rotation == 270) width else height
+                    val detected = mutableListOf<FaceBoundingBox>()
+
+                    for (face in rotFaces.take(maxFaces)) {
+                        val box = face.boundingBox
+                        val rL = (box.left.toFloat() / rotW).coerceIn(0f, 0.98f)
+                        val rT = (box.top.toFloat() / rotH).coerceIn(0f, 0.98f)
+                        val rR = (box.right.toFloat() / rotW).coerceIn(rL + 0.02f, 1f)
+                        val rB = (box.bottom.toFloat() / rotH).coerceIn(rT + 0.02f, 1f)
+
+                        val (origL, origT, origR, origB) = when (rotation) {
+                            90 -> listOf(
+                                rT.coerceIn(0f, 1f),
+                                (1f - rR).coerceIn(0f, 1f),
+                                rB.coerceIn(0f, 1f),
+                                (1f - rL).coerceIn(0f, 1f)
+                            )
+                            270 -> listOf(
+                                (1f - rB).coerceIn(0f, 1f),
+                                rL.coerceIn(0f, 1f),
+                                (1f - rT).coerceIn(0f, 1f),
+                                rR.coerceIn(0f, 1f)
+                            )
+                            else -> listOf(
+                                (1f - rR).coerceIn(0f, 1f),
+                                (1f - rB).coerceIn(0f, 1f),
+                                (1f - rL).coerceIn(0f, 1f),
+                                (1f - rT).coerceIn(0f, 1f)
+                            )
+                        }
+
+                        detected.add(
+                            FaceBoundingBox(
+                                leftNorm = minOf(origL, origR).coerceIn(0f, 0.95f),
+                                topNorm = minOf(origT, origB).coerceIn(0f, 0.95f),
+                                rightNorm = maxOf(origL, origR).coerceIn(0.05f, 1f),
+                                bottomNorm = maxOf(origT, origB).coerceIn(0.05f, 1f),
+                                confidence = 0.92f
+                            )
+                        )
+                    }
+                    if (detected.isNotEmpty()) {
+                        return nmsDeduplicate(detected, iouThreshold = 0.35f)
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // 3. Fallback to Multi-Scale Pyramid Android FaceDetector
         return detectFacesLegacyFallback(bitmap, maxFaces)
     }
 
@@ -245,10 +378,124 @@ class FaceRecognitionEngine(private val context: Context) {
 
     /**
      * Analyzes head posture, angles, and face centering for smart auto-guided capture.
-     * Uses Android platform FaceDetector with Euler angles and facial geometry.
+     * Uses Google ML Kit with real Euler angles and smile probability, falling back to legacy detector.
      * @param targetStep 1 (Straight), 2 (Turn Left), 3 (Turn Right), 4 (Tilt Up), 5 (Smile/Expression)
      */
     fun analyzeFacePose(bitmap: Bitmap, targetStep: Int): FacePoseAnalysis {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width < 32 || height < 32) {
+            return FacePoseAnalysis(
+                hasFace = false,
+                boundingBox = null,
+                detectedPose = DetectedHeadPose.NO_FACE,
+                eulerX = 0f,
+                eulerY = 0f,
+                eulerZ = 0f,
+                eyeDistance = 0f,
+                isCentered = false,
+                isGoodLighting = false,
+                poseMatchScore = 0f,
+                feedbackMessageBn = "ক্যামেরার ফ্রেমে মুখ রাখুন",
+                feedbackMessageEn = "Position your face inside the frame"
+            )
+        }
+
+        // 1. Primary accurate ML Kit detection
+        try {
+            val inputImage = InputImage.fromBitmap(bitmap, 0)
+            val task = mlKitFaceDetector.process(inputImage)
+            val mlFaces = Tasks.await(task, 800, TimeUnit.MILLISECONDS)
+            if (mlFaces.isNotEmpty()) {
+                val face = mlFaces[0]
+                val box = face.boundingBox
+                val leftNorm = (box.left.toFloat() / width).coerceIn(0f, 0.95f)
+                val topNorm = (box.top.toFloat() / height).coerceIn(0f, 0.95f)
+                val rightNorm = (box.right.toFloat() / width).coerceIn(leftNorm + 0.05f, 1f)
+                val bottomNorm = (box.bottom.toFloat() / height).coerceIn(topNorm + 0.05f, 1f)
+
+                val eulerX = face.headEulerAngleX
+                val eulerY = face.headEulerAngleY
+                val eulerZ = face.headEulerAngleZ
+                val smileProb = face.smilingProbability ?: 0f
+
+                val detectedBox = FaceBoundingBox(
+                    leftNorm = leftNorm,
+                    topNorm = topNorm,
+                    rightNorm = rightNorm,
+                    bottomNorm = bottomNorm,
+                    confidence = 0.95f
+                )
+
+                val normCenterX = (leftNorm + rightNorm) * 0.5f
+                val normCenterY = (topNorm + bottomNorm) * 0.5f
+                val isCentered = normCenterX in 0.15f..0.85f && normCenterY in 0.10f..0.90f
+
+                val detectedPose = when {
+                    smileProb >= 0.35f -> DetectedHeadPose.SMILE_EXPRESSION
+                    eulerY > 5.0f || normCenterX < 0.40f -> DetectedHeadPose.TURN_LEFT
+                    eulerY < -5.0f || normCenterX > 0.60f -> DetectedHeadPose.TURN_RIGHT
+                    eulerX > 5.0f || normCenterY < 0.38f -> DetectedHeadPose.TILT_UP
+                    eulerX < -5.0f || normCenterY > 0.65f -> DetectedHeadPose.TILT_DOWN
+                    else -> DetectedHeadPose.STRAIGHT
+                }
+
+                val (score, msgBn, msgEn) = when (targetStep) {
+                    1 -> {
+                        if (detectedPose == DetectedHeadPose.STRAIGHT || (eulerY in -6.0f..6.0f && eulerX in -6.0f..6.0f)) {
+                            Triple(1.0f, "নিখুঁত! সোজাভাবে স্থির থাকুন...", "Perfect! Hold straight position...")
+                        } else {
+                            Triple(0.75f, "সোজা ক্যামেরার দিকে তাকান 👤", "Look forward at camera")
+                        }
+                    }
+                    2 -> {
+                        if (detectedPose == DetectedHeadPose.TURN_LEFT || eulerY > 3.0f) {
+                            Triple(1.0f, "চমৎকার! বাম কোণ শনাক্ত হয়েছে 👈", "Great! Left angle detected...")
+                        } else {
+                            Triple(0.2f, "মাথাটি সামান্য বাম দিকে ঘোরান 👈", "Turn head slightly to the left")
+                        }
+                    }
+                    3 -> {
+                        if (detectedPose == DetectedHeadPose.TURN_RIGHT || eulerY < -3.0f) {
+                            Triple(1.0f, "চমৎকার! ডান কোণ শনাক্ত হয়েছে 👉", "Great! Right angle detected...")
+                        } else {
+                            Triple(0.2f, "মাথাটি সামান্য ডান দিকে ঘোরান 👉", "Turn head slightly to the right")
+                        }
+                    }
+                    4 -> {
+                        if (detectedPose == DetectedHeadPose.TILT_UP || eulerX > 3.0f) {
+                            Triple(1.0f, "চমৎকার! উপরের কোণ শনাক্ত হয়েছে 👆", "Great! Chin up detected...")
+                        } else {
+                            Triple(0.2f, "থুতনি সামান্য উপরের দিকে তুলুন 👆", "Tilt your chin slightly upwards")
+                        }
+                    }
+                    5 -> {
+                        if (smileProb >= 0.30f || detectedPose == DetectedHeadPose.SMILE_EXPRESSION) {
+                            Triple(1.0f, "সুন্দর! স্বাভাবিক হাসিমুখ রাখুন 😊", "Nice! Smile and hold...")
+                        } else {
+                            Triple(0.4f, "সামান্য হাসুন 😊", "Smile slightly")
+                        }
+                    }
+                    else -> Triple(0.9f, "স্থির থাকুন...", "Hold steady...")
+                }
+
+                return FacePoseAnalysis(
+                    hasFace = true,
+                    boundingBox = detectedBox,
+                    detectedPose = detectedPose,
+                    eulerX = eulerX,
+                    eulerY = eulerY,
+                    eulerZ = eulerZ,
+                    eyeDistance = (rightNorm - leftNorm) * width * 0.4f,
+                    isCentered = isCentered,
+                    isGoodLighting = true,
+                    poseMatchScore = score,
+                    feedbackMessageBn = msgBn,
+                    feedbackMessageEn = msgEn
+                )
+            }
+        } catch (_: Throwable) {}
+
         return analyzeFacePoseLegacy(bitmap, targetStep)
     }
 
@@ -1041,7 +1288,17 @@ class FaceRecognitionEngine(private val context: Context) {
         val w = (r - l).coerceAtLeast(0.01f)
         val h = (b - t).coerceAtLeast(0.01f)
 
-        // 1. Primary: image-aware adaptive boundary scanning
+        // 1. Primary Neural Human Segmentation: ML Kit Selfie Segmentation detects hands, raised arms, gestures, and true silhouettes
+        if (bitmap != null && !bitmap.isRecycled && bitmap.width > 16 && bitmap.height > 16) {
+            try {
+                val (mlContour, mlDiag) = bodySegmenter.extractBodyContourSync(bitmap, box)
+                if (mlContour.isNotEmpty()) {
+                    return Pair(mlContour, mlDiag)
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // 2. Fallback: image-aware adaptive boundary scanning
         if (bitmap != null && !bitmap.isRecycled && bitmap.width > 10 && bitmap.height > 10) {
             try {
                 val bmpW = bitmap.width
@@ -1488,7 +1745,13 @@ class FaceRecognitionEngine(private val context: Context) {
     fun close() {
         featureExtractor.close()
         try {
+            mlKitFaceDetector.close()
+        } catch (_: Throwable) {}
+        try {
             tfliteDetector.close()
+        } catch (_: Throwable) {}
+        try {
+            bodySegmenter.close()
         } catch (_: Throwable) {}
     }
 }

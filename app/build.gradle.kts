@@ -113,6 +113,8 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
   implementation(libs.tensorflow.lite)
+  implementation(libs.mlkit.segmentation.selfie)
+  implementation(libs.mlkit.face.detection)
   implementation(libs.androidx.exifinterface)
   // implementation(libs.mlkit.objectdetection)
   // implementation(libs.converter.moshi)
