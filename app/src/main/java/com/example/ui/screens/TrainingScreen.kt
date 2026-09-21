@@ -154,11 +154,14 @@ fun TrainingScreen(
             lastLoggedPhase = phase
             shouldLog = true
             logText = when (phase) {
-                TrainingPhase.EXTRACTING_FEATURES -> "Started feature extraction for ${current.totalSteps} images..."
+                TrainingPhase.EXTRACTING_FEATURES -> if (isFaceMode) "ধাপ ১: বায়োমেট্রিক ও ফেস ফিচার এক্সট্রাকশন শুরু (${current.totalSteps}টি ছবি)..." else "Started feature extraction for ${current.totalSteps} images..."
                 TrainingPhase.STANDARDIZING_FEATURES -> "Standardizing extracted neural features with Z-score & L2..."
-                TrainingPhase.TRAINING_NEURAL_NET -> "Started neural network backpropagation training..."
-                TrainingPhase.FINALIZING_MODEL -> "Saving model weights and scaler to storage..."
-                TrainingPhase.COMPLETED -> msg.ifBlank { "Training completed successfully!" }
+                TrainingPhase.TRAINING_NEURAL_NET -> {
+                    lastLoggedEpoch = epoch
+                    if (isFaceMode) msg.ifBlank { "ধাপ ২: মাল্টি-পাস বায়োমেট্রিক সেলফ-রিভিউ প্রশিক্ষণ শুরু..." } else "Started neural network backpropagation training..."
+                }
+                TrainingPhase.FINALIZING_MODEL -> if (isFaceMode) "ধাপ ৩: বায়োমেট্রিক সেন্ট্রয়েড ও মডেল সেভ করা হচ্ছে..." else "Saving model weights and scaler to storage..."
+                TrainingPhase.COMPLETED -> msg.ifBlank { if (isFaceMode) "বায়োমেট্রিক মডেল সফলভাবে প্রস্তুত হয়েছে!" else "Training completed successfully!" }
                 TrainingPhase.CANCELLED -> "Training stopped by user."
                 TrainingPhase.ERROR -> msg.ifBlank { "Training error occurred." }
                 else -> ""
@@ -168,12 +171,12 @@ fun TrainingScreen(
             shouldLog = true
             logText = msg
         } else if (phase == TrainingPhase.EXTRACTING_FEATURES && current.totalSteps > 0) {
-            // Milestone logging every ~10% step (e.g. 10%, 20%, ..., 100%)
-            val pct10 = ((current.currentStep.toDouble() / current.totalSteps) * 10).toInt() * 10
-            if (pct10 > 0 && pct10 != lastLoggedMilestonePct && pct10 <= 100) {
-                lastLoggedMilestonePct = pct10
+            // Milestone logging every ~25% step (e.g. 25%, 50%, 75%, 100%)
+            val pct25 = ((current.currentStep.toDouble() / current.totalSteps) * 4).toInt() * 25
+            if (pct25 > 0 && pct25 != lastLoggedMilestonePct && pct25 <= 100) {
+                lastLoggedMilestonePct = pct25
                 shouldLog = true
-                logText = "Extracted features: ${current.currentStep}/${current.totalSteps} images ($pct10%) [${current.speedText}]"
+                logText = if (isFaceMode) "ফিচার এক্সট্রাক্ট করা হয়েছে: ${current.currentStep}/${current.totalSteps} ছবি ($pct25%)" else "Extracted features: ${current.currentStep}/${current.totalSteps} images ($pct25%) [${current.speedText}]"
             }
         } else if (phase == TrainingPhase.ERROR || phase == TrainingPhase.COMPLETED) {
             if (logs.isEmpty() || logs.last() != msg) {
@@ -321,11 +324,7 @@ fun TrainingScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         // High-Precision Progress Percent
-                        val displayPercentage = if (phase == TrainingPhase.EXTRACTING_FEATURES && (progress?.totalSteps ?: 0) > 0) {
-                            ((progress?.currentStep ?: 0).toFloat() / (progress?.totalSteps ?: 1).toFloat()) * 100f
-                        } else {
-                            pct
-                        }
+                        val displayPercentage = (progress?.overallPercentage ?: 0f).coerceIn(0f, 100f)
 
                         Text(
                             text = String.format(Locale.US, "%.1f%%", displayPercentage),

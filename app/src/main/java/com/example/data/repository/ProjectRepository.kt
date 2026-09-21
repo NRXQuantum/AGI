@@ -482,6 +482,30 @@ class ProjectRepository(
                 val cycleHistoryJson = org.json.JSONArray()
 
                 for (cycle in 1..totalCycles) {
+                    val cycleStartPct = (35f + ((cycle - 1).toFloat() / totalCycles.toFloat()) * 60f).coerceIn(35f, 95f)
+                    val elapsedMsStart = (System.currentTimeMillis() - overallStartMs).coerceAtLeast(100L)
+                    val elapsedSecStart = elapsedMsStart / 1000L
+
+                    onProgress(
+                        TrainingProgress(
+                            currentEpoch = cycle,
+                            totalEpochs = totalCycles,
+                            loss = finalLoss,
+                            accuracy = finalAccuracy,
+                            statusMessage = "পাস $cycle/$totalCycles: বায়োমেট্রিক সেন্ট্রয়েড পরীক্ষা ও ত্রুটি বিশ্লেষণ চলছে...",
+                            overallPercentage = cycleStartPct,
+                            phase = TrainingPhase.TRAINING_NEURAL_NET,
+                            currentStep = cycle,
+                            totalSteps = totalCycles,
+                            elapsedSeconds = elapsedSecStart,
+                            estimatedRemainingSeconds = ((totalCycles - cycle + 1) * 1L).coerceAtLeast(1L),
+                            speedText = "পাস $cycle/$totalCycles"
+                        )
+                    )
+
+                    // Pacing delay to ensure real-time UI animation and visible transition
+                    kotlinx.coroutines.delay(400)
+
                     var correctMatches = 0
                     var totalLoss = 0.0
                     val classMistakes = IntArray(numClasses)
@@ -572,7 +596,7 @@ class ProjectRepository(
 
                     val elapsedMs = (System.currentTimeMillis() - overallStartMs).coerceAtLeast(100L)
                     val elapsedSec = elapsedMs / 1000L
-                    val progressPct = (40f + (cycle.toFloat() / totalCycles.toFloat()) * 55f).coerceIn(40f, 95f)
+                    val progressPct = (35f + (cycle.toFloat() / totalCycles.toFloat()) * 60f).coerceIn(35f, 95f)
 
                     val mistakesSummary = if (classMistakes.sum() > 0) {
                         " • ${classMistakes.sum()}টি ত্রুটি সংশোধন হচ্ছে"
@@ -586,7 +610,7 @@ class ProjectRepository(
                             totalEpochs = totalCycles,
                             loss = cycleLoss,
                             accuracy = cycleAccuracy,
-                            statusMessage = "পাস $cycle/$totalCycles: $correctMatches/$totalEvaluated ফটো সঠিক (${String.format(Locale.US, "%.1f%%", cycleAccuracy * 100f)})$mistakesSummary",
+                            statusMessage = "পাস $cycle/$totalCycles সম্পন্ন: $correctMatches/$totalEvaluated ফটো নিখুঁত (${String.format(Locale.US, "%.1f%%", cycleAccuracy * 100f)})$mistakesSummary",
                             overallPercentage = progressPct,
                             phase = TrainingPhase.TRAINING_NEURAL_NET,
                             currentStep = cycle,
@@ -598,7 +622,7 @@ class ProjectRepository(
                     )
 
                     // Cooperative yield to ensure real-time UI animation and notification delivery
-                    kotlinx.coroutines.delay(220)
+                    kotlinx.coroutines.delay(800)
                 }
 
                 val weightsArray = Array(numClasses) { c ->
