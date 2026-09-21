@@ -57,16 +57,16 @@ jobs:
             if [ -n "$AGP_VER" ]; then
               AGP_MAJOR=$(echo "$AGP_VER" | cut -d. -f1)
               case "$AGP_MAJOR" in
-                9) GRADLE_VER="9.7.1" ;;
-                8) GRADLE_VER="8.11.1" ;;
+                9) GRADLE_VER="9.0.0" ;;   # AGP 9.x এর জন্য (যদি প্রকৃতপক্ষে ব্যবহৃত হয়)
+                8) GRADLE_VER="8.11.1" ;;  # AGP 8.x এর জন্য নিরাপদ
                 7) GRADLE_VER="7.6.4" ;;
-                *) GRADLE_VER="9.7.1" ;;
+                *) GRADLE_VER="8.11.1" ;;
               esac
             fi
           fi
 
           if [ -z "$GRADLE_VER" ]; then
-            GRADLE_VER="9.7.1"
+            GRADLE_VER="8.11.1"   # ডিফল্ট নিরাপদ ভার্সন
           fi
 
           echo "Using Gradle version: $GRADLE_VER"
