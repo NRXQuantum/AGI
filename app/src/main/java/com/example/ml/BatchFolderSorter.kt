@@ -155,7 +155,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         repository: ProjectRepository,
         fileAction: FileSortAction = FileSortAction.MOVE,
         pacingMode: SorterPacingMode = SorterPacingMode.AUTO,
-        skipIfNoFaceDetected: Boolean = false
+        skipIfNoFaceDetected: Boolean = false,
+        resumeFromIndex: Int = 0
     ) {
         startSortingInternal(
             projectId = projectId,
@@ -168,7 +169,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
             repository = repository,
             fileAction = fileAction,
             pacingMode = pacingMode,
-            skipIfNoFaceDetected = skipIfNoFaceDetected
+            skipIfNoFaceDetected = skipIfNoFaceDetected,
+            resumeFromIndex = resumeFromIndex
         )
     }
 
@@ -180,7 +182,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         destinationDisplayName: String,
         fileAction: FileSortAction = FileSortAction.MOVE,
         pacingMode: SorterPacingMode = SorterPacingMode.AUTO,
-        skipIfNoFaceDetected: Boolean = false
+        skipIfNoFaceDetected: Boolean = false,
+        resumeFromIndex: Int = 0
     ) {
         startSortingInternal(
             projectId = null,
@@ -193,7 +196,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
             repository = null,
             fileAction = fileAction,
             pacingMode = pacingMode,
-            skipIfNoFaceDetected = skipIfNoFaceDetected
+            skipIfNoFaceDetected = skipIfNoFaceDetected,
+            resumeFromIndex = resumeFromIndex
         )
     }
 
@@ -208,7 +212,8 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         repository: ProjectRepository?,
         fileAction: FileSortAction = FileSortAction.MOVE,
         pacingMode: SorterPacingMode = SorterPacingMode.AUTO,
-        skipIfNoFaceDetected: Boolean = false
+        skipIfNoFaceDetected: Boolean = false,
+        resumeFromIndex: Int = 0
     ) {
         if (_state.value.isRunning) {
             stopSorting()
@@ -224,11 +229,16 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
         val activeModelLabel = customModel?.let { "${it.fileName} (${it.formatName})" } ?: projectName
         val classesInfo = customModel?.let { "${it.numClasses} categories" } ?: ""
         val faceFilterLog = if (skipIfNoFaceDetected) " | 👤 Face Filter: Skip Non-Faces" else ""
+        val resumeLog = if (resumeFromIndex > 0) " | ⏩ Resuming from photo #$resumeFromIndex" else ""
+
+        val previousSummary = if (resumeFromIndex > 0) _state.value.sortedSummary else emptyMap()
+        val previousSkipped = if (resumeFromIndex > 0) _state.value.skippedCount else 0
 
         _state.value = BatchSortState(
             isRunning = true,
             isPaused = false,
             isCompleted = false,
+            currentImageIndex = resumeFromIndex,
             sourceDisplayName = sourceDisplayName,
             destinationDisplayName = destinationDisplayName,
             activeModelName = activeModelLabel,
@@ -238,8 +248,10 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
             availableRamMb = initialRamMb,
             freeStorageGb = initialStorageGb,
             hardwareTierName = hardwareProfile.tier.displayName,
+            sortedSummary = previousSummary,
+            skippedCount = previousSkipped,
             logs = listOf(
-                "🚀 Initiating Batch Auto-Sorter for model: '$activeModelLabel' $classesInfo".trim(),
+                "🚀 Initiating Batch Auto-Sorter for model: '$activeModelLabel' $classesInfo$resumeLog".trim(),
                 "📱 Device Spec: ${hardwareProfile.description} (${hardwareProfile.tier.displayName})",
                 "⚙️ Config: Mode = ${pacingMode.displayName} | Storage Action = ${fileAction.displayName}$faceFilterLog",
                 "📂 Source: $sourceDisplayName",
@@ -465,21 +477,26 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                     emptyList()
                 }
 
-                var skippedCount = 0
+                var skippedCount = previousSkipped
 
                 val summary = mutableMapOf<String, Int>()
+                summary.putAll(previousSummary)
                 val streamBuffer = ByteArray(65536) // 64KB fast buffered stream
                 var lastUiUpdateTime = 0L
 
                 // 5. Process each photo with strict memory & storage management
                 for ((index, item) in imageItems.withIndex()) {
+                    if (index < resumeFromIndex) {
+                        continue
+                    }
+
                     // Check Pause state
                     while (_state.value.isPaused && _state.value.isRunning && isActive) {
                         delay(300)
                     }
 
                     if (!isActive || !_state.value.isRunning) {
-                        addLog("🛑 Auto-sorting was stopped.")
+                        addLog("🛑 Auto-sorting was stopped at photo #${index + 1}.")
                         break
                     }
 
@@ -491,11 +508,11 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                             freeStorageGb = currentStorageGb
                         )
 
-                        if (currentStorageGb < 0.25f && fileAction == FileSortAction.COPY) {
-                            addLog("⚠️ Low device storage (${String.format(Locale.US, "%.2f", currentStorageGb)} GB left). Pausing to prevent disk full crash.", isError = true)
+                        if (currentStorageGb < 0.05f && fileAction == FileSortAction.COPY) {
+                            addLog("⚠️ Device storage critically low (${String.format(Locale.US, "%.2f", currentStorageGb)} GB left). Pausing to prevent disk full crash.", isError = true)
                             _state.value = _state.value.copy(
                                 isPaused = true,
-                                errorMessage = "Device storage critically low (<250MB). Please clear storage or select 'Move' mode."
+                                errorMessage = "Device storage critically low (<50MB). Free storage space or tap 'Resume' to continue."
                             )
                             while (_state.value.isPaused && _state.value.isRunning && isActive) {
                                 delay(500)
@@ -509,9 +526,9 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                         activityManager.getMemoryInfo(memInfo)
                         val lowMemory = memInfo.lowMemory || (memInfo.availMem.toFloat() / memInfo.totalMem.toFloat()) < 0.12f
                         if (lowMemory) {
-                            addLog("⚠️ High memory pressure detected (${memInfo.availMem / (1024 * 1024)}MB free). Pausing 350ms to reclaim RAM...")
+                            addLog("⚠️ High memory pressure detected (${memInfo.availMem / (1024 * 1024)}MB free). Reclaiming RAM...")
                             System.gc()
-                            delay(350)
+                            delay(250)
                         } else if (index % 50 == 0) {
                             yield() // Cooperative coroutine dispatch
                         }
@@ -522,229 +539,240 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                         delay(pacingDelayMs)
                     }
 
-                    // Decode with automatic EXIF orientation correction so portrait photos are never sideways
-                    val bitmap = ImageUtils.decodeOrientedBitmapFromStream(
-                        inputStreamProvider = { item.openStream(appContext) },
-                        maxDim = 1280
-                    )
-
-                    if (bitmap == null) {
-                        skippedCount++
-                        addLog("⚠️ Could not decode '${item.name}', skipping.")
-                        _state.value = _state.value.copy(
-                            currentImageIndex = index + 1,
-                            currentImageName = item.name,
-                            skippedCount = skippedCount
-                        )
-                        continue
-                    }
-
-                    var rawLabel = ""
-                    var predictionConfidence = 0f
-
-                    if (isFaceModel && faceEngine != null && enrolledPersons.isNotEmpty()) {
-                        // Accurate Face Recognition Pipeline: Detect face, crop, extract 128D embedding, match against enrolled centroids
-                        val matchThreshold = repository?.getFaceMatchThreshold() ?: 0.45f
-                        val identified = faceEngine.identifyHumansInScene(
-                            sceneBitmap = bitmap,
-                            enrolledPersons = enrolledPersons,
-                            matchThreshold = matchThreshold,
-                            maxPersons = 1
+                    try {
+                        // Decode with automatic EXIF orientation correction so portrait photos are never sideways
+                        val bitmap = ImageUtils.decodeOrientedBitmapFromStream(
+                            inputStreamProvider = { item.openStream(appContext) },
+                            maxDim = 1280
                         )
 
-                        if (identified.isNotEmpty()) {
-                            val topPerson = identified[0]
-                            rawLabel = topPerson.personName
-                            predictionConfidence = topPerson.confidence
-                        } else {
-                            // Secondary safety verification: check if any face was detected even if not matching enrolled persons
-                            val fallbackFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
-                            if (fallbackFaces.isNotEmpty()) {
-                                rawLabel = "Unknown Person"
-                                predictionConfidence = fallbackFaces[0].confidence
+                        if (bitmap == null) {
+                            skippedCount++
+                            addLog("⚠️ Could not decode '${item.name}', skipping.")
+                            _state.value = _state.value.copy(
+                                currentImageIndex = index + 1,
+                                currentImageName = item.name,
+                                skippedCount = skippedCount
+                            )
+                            continue
+                        }
+
+                        var rawLabel = ""
+                        var predictionConfidence = 0f
+
+                        if (isFaceModel && faceEngine != null && enrolledPersons.isNotEmpty()) {
+                            // Accurate Face Recognition Pipeline: Detect face, crop, extract 128D embedding, match against enrolled centroids
+                            val matchThreshold = repository?.getFaceMatchThreshold() ?: 0.45f
+                            val identified = faceEngine.identifyHumansInScene(
+                                sceneBitmap = bitmap,
+                                enrolledPersons = enrolledPersons,
+                                matchThreshold = matchThreshold,
+                                maxPersons = 1
+                            )
+
+                            if (identified.isNotEmpty()) {
+                                val topPerson = identified[0]
+                                rawLabel = topPerson.personName
+                                predictionConfidence = topPerson.confidence
                             } else {
-                                val fallbackBodies = faceEngine.detectHumanBodies(bitmap, maxBodies = 1)
-                                if (fallbackBodies.isNotEmpty()) {
+                                // Secondary safety verification: check if any face was detected even if not matching enrolled persons
+                                val fallbackFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
+                                if (fallbackFaces.isNotEmpty()) {
                                     rawLabel = "Unknown Person"
-                                    predictionConfidence = 0.50f
+                                    predictionConfidence = fallbackFaces[0].confidence
                                 } else {
-                                    if (skipIfNoFaceDetected) {
-                                        bitmap.recycle()
-                                        skippedCount++
-                                        addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
-                                        _state.value = _state.value.copy(
-                                            currentImageIndex = index + 1,
-                                            currentImageName = item.name,
-                                            detectedLabel = "Skipped (No Face Detected)",
-                                            confidence = 0f,
-                                            skippedCount = skippedCount
-                                        )
-                                        continue
+                                    val fallbackBodies = faceEngine.detectHumanBodies(bitmap, maxBodies = 1)
+                                    if (fallbackBodies.isNotEmpty()) {
+                                        rawLabel = "Unknown Person"
+                                        predictionConfidence = 0.50f
                                     } else {
-                                        rawLabel = "No Face Detected"
-                                        predictionConfidence = 0f
+                                        if (skipIfNoFaceDetected) {
+                                            bitmap.recycle()
+                                            skippedCount++
+                                            addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
+                                            _state.value = _state.value.copy(
+                                                currentImageIndex = index + 1,
+                                                currentImageName = item.name,
+                                                detectedLabel = "Skipped (No Face Detected)",
+                                                confidence = 0f,
+                                                skippedCount = skippedCount
+                                            )
+                                            continue
+                                        } else {
+                                            rawLabel = "No Face Detected"
+                                            predictionConfidence = 0f
+                                        }
                                     }
                                 }
                             }
-                        }
-                    } else {
-                        // Standard Image Classification check for face / human filter if enabled
-                        if (skipIfNoFaceDetected && faceEngine != null) {
-                            val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
-                            val detectedBodies = if (detectedFaces.isEmpty()) faceEngine.detectHumanBodies(bitmap, maxBodies = 1) else emptyList()
-                            if (detectedFaces.isEmpty() && detectedBodies.isEmpty()) {
-                                bitmap.recycle()
-                                skippedCount++
-                                addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
-                                _state.value = _state.value.copy(
-                                    currentImageIndex = index + 1,
-                                    currentImageName = item.name,
-                                    detectedLabel = "Skipped (No Face Detected)",
-                                    confidence = 0f,
-                                    skippedCount = skippedCount
-                                )
-                                continue
+                        } else {
+                            // Standard Image Classification check for face / human filter if enabled
+                            if (skipIfNoFaceDetected && faceEngine != null) {
+                                val detectedFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
+                                val detectedBodies = if (detectedFaces.isEmpty()) faceEngine.detectHumanBodies(bitmap, maxBodies = 1) else emptyList()
+                                if (detectedFaces.isEmpty() && detectedBodies.isEmpty()) {
+                                    bitmap.recycle()
+                                    skippedCount++
+                                    addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
+                                    _state.value = _state.value.copy(
+                                        currentImageIndex = index + 1,
+                                        currentImageName = item.name,
+                                        detectedLabel = "Skipped (No Face Detected)",
+                                        confidence = 0f,
+                                        skippedCount = skippedCount
+                                    )
+                                    continue
+                                }
                             }
+
+                            val extractor = featureExtractor ?: FeatureExtractor(appContext, numThreads = tfliteThreads).also { featureExtractor = it }
+                            val features = extractor.extractFeatures(bitmap)
+                            val prediction = trainer.predict(features)
+                            rawLabel = prediction.classLabel
+                            predictionConfidence = prediction.confidence
                         }
 
-                        val extractor = featureExtractor ?: FeatureExtractor(appContext, numThreads = tfliteThreads).also { featureExtractor = it }
-                        val features = extractor.extractFeatures(bitmap)
-                        val prediction = trainer.predict(features)
-                        rawLabel = prediction.classLabel
-                        predictionConfidence = prediction.confidence
-                    }
+                        bitmap.recycle() // Immediately recycle native bitmap memory
 
-                    bitmap.recycle() // Immediately recycle native bitmap memory
+                        val safeCategoryName = rawLabel.trim().replace("/", "_").replace("\\", "_").ifBlank { "Unclassified" }
 
-                    val safeCategoryName = rawLabel.trim().replace("/", "_").replace("\\", "_").ifBlank { "Unclassified" }
+                        var sortedSuccess = false
 
-                    var sortedSuccess = false
-
-                    if (destTreeDoc != null) {
-                        // SAF Document Target with category folder caching
-                        var categoryDoc = categoryDocCache[safeCategoryName]
-                        if (categoryDoc == null || !categoryDoc.isDirectory) {
-                            categoryDoc = destTreeDoc.findFile(safeCategoryName)
+                        if (destTreeDoc != null) {
+                            // SAF Document Target with category folder caching
+                            var categoryDoc = categoryDocCache[safeCategoryName]
                             if (categoryDoc == null || !categoryDoc.isDirectory) {
-                                categoryDoc = destTreeDoc.createDirectory(safeCategoryName)
-                                if (categoryDoc != null) {
-                                    addLog("📁 Created new category folder: '/$safeCategoryName'")
-                                }
-                            }
-                            if (categoryDoc != null) {
-                                categoryDocCache[safeCategoryName] = categoryDoc
-                            }
-                        }
-
-                        if (categoryDoc != null) {
-                            val targetFile = categoryDoc.createFile("image/jpeg", item.name)
-                            if (targetFile != null) {
-                                item.openStream(appContext)?.use { inStream ->
-                                    appContext.contentResolver.openOutputStream(targetFile.uri)?.use { outStream ->
-                                        inStream.copyTo(outStream, bufferSize = 65536)
-                                        sortedSuccess = true
+                                categoryDoc = destTreeDoc.findFile(safeCategoryName)
+                                if (categoryDoc == null || !categoryDoc.isDirectory) {
+                                    categoryDoc = destTreeDoc.createDirectory(safeCategoryName)
+                                    if (categoryDoc != null) {
+                                        addLog("📁 Created new category folder: '/$safeCategoryName'")
                                     }
                                 }
-                                // If MOVE action: delete source to save duplicate storage
-                                if (sortedSuccess && fileAction == FileSortAction.MOVE) {
-                                    item.deleteSource(appContext)
+                                if (categoryDoc != null) {
+                                    categoryDocCache[safeCategoryName] = categoryDoc
                                 }
                             }
-                        }
-                    } else if (destFileDir != null) {
-                        // Standard filesystem target with directory caching
-                        var categoryFolder = categoryDirCache[safeCategoryName]
-                        if (categoryFolder == null || !categoryFolder.exists()) {
-                            categoryFolder = File(destFileDir, safeCategoryName)
-                            if (!categoryFolder.exists()) {
-                                val created = categoryFolder.mkdirs()
-                                if (created) {
-                                    addLog("📁 Created new category folder: '/$safeCategoryName'")
+
+                            if (categoryDoc != null) {
+                                val targetFile = categoryDoc.createFile("image/jpeg", item.name)
+                                if (targetFile != null) {
+                                    item.openStream(appContext)?.use { inStream ->
+                                        appContext.contentResolver.openOutputStream(targetFile.uri)?.use { outStream ->
+                                            inStream.copyTo(outStream, bufferSize = 65536)
+                                            sortedSuccess = true
+                                        }
+                                    }
+                                    // If MOVE action: delete source to save duplicate storage
+                                    if (sortedSuccess && fileAction == FileSortAction.MOVE) {
+                                        item.deleteSource(appContext)
+                                    }
                                 }
                             }
-                            categoryDirCache[safeCategoryName] = categoryFolder
-                        }
-
-                        var destFile = File(categoryFolder, item.name)
-                        if (destFile.exists()) {
-                            val baseName = item.name.substringBeforeLast('.')
-                            val ext = item.name.substringAfterLast('.', "jpg")
-                            var counter = 1
-                            while (destFile.exists()) {
-                                destFile = File(categoryFolder, "${baseName}_$counter.$ext")
-                                counter++
+                        } else if (destFileDir != null) {
+                            // Standard filesystem target with directory caching
+                            var categoryFolder = categoryDirCache[safeCategoryName]
+                            if (categoryFolder == null || !categoryFolder.exists()) {
+                                categoryFolder = File(destFileDir, safeCategoryName)
+                                if (!categoryFolder.exists()) {
+                                    val created = categoryFolder.mkdirs()
+                                    if (created) {
+                                        addLog("📁 Created new category folder: '/$safeCategoryName'")
+                                    }
+                                }
+                                categoryDirCache[safeCategoryName] = categoryFolder
                             }
-                        }
 
-                        if (fileAction == FileSortAction.MOVE && item is QueuedImageItem.FileSource) {
-                            // Instant atomic file move (0 extra disk space, 0 memory used!)
-                            val renamed = item.file.renameTo(destFile)
-                            if (renamed) {
-                                sortedSuccess = true
+                            var destFile = File(categoryFolder, item.name)
+                            if (destFile.exists()) {
+                                val baseName = item.name.substringBeforeLast('.')
+                                val ext = item.name.substringAfterLast('.', "jpg")
+                                var counter = 1
+                                while (destFile.exists()) {
+                                    destFile = File(categoryFolder, "${baseName}_$counter.$ext")
+                                    counter++
+                                }
+                            }
+
+                            if (fileAction == FileSortAction.MOVE && item is QueuedImageItem.FileSource) {
+                                // Instant atomic file move (0 extra disk space, 0 memory used!)
+                                val renamed = item.file.renameTo(destFile)
+                                if (renamed) {
+                                    sortedSuccess = true
+                                } else {
+                                    // Fallback copy + delete across mount points
+                                    item.openStream(appContext)?.use { inStream ->
+                                        FileOutputStream(destFile).use { outStream ->
+                                            inStream.copyTo(outStream, bufferSize = 65536)
+                                            sortedSuccess = true
+                                        }
+                                    }
+                                    if (sortedSuccess) {
+                                        item.deleteSource(appContext)
+                                    }
+                                }
                             } else {
-                                // Fallback copy + delete across mount points
+                                // Standard copy
                                 item.openStream(appContext)?.use { inStream ->
                                     FileOutputStream(destFile).use { outStream ->
                                         inStream.copyTo(outStream, bufferSize = 65536)
                                         sortedSuccess = true
                                     }
                                 }
-                                if (sortedSuccess) {
+                                if (sortedSuccess && fileAction == FileSortAction.MOVE) {
                                     item.deleteSource(appContext)
                                 }
                             }
-                        } else {
-                            // Standard copy
-                            item.openStream(appContext)?.use { inStream ->
-                                FileOutputStream(destFile).use { outStream ->
-                                    inStream.copyTo(outStream, bufferSize = 65536)
-                                    sortedSuccess = true
-                                }
-                            }
-                            if (sortedSuccess && fileAction == FileSortAction.MOVE) {
-                                item.deleteSource(appContext)
-                            }
                         }
-                    }
 
-                    if (sortedSuccess) {
-                        summary[safeCategoryName] = (summary[safeCategoryName] ?: 0) + 1
-                    }
+                        if (sortedSuccess) {
+                            summary[safeCategoryName] = (summary[safeCategoryName] ?: 0) + 1
+                        }
 
-                    // UI Throttling: Update StateFlow at most once per 200ms or on completion
-                    val now = System.currentTimeMillis()
-                    val isFirstOrLast = index == 0 || index == totalCount - 1
-                    if (isFirstOrLast || now - lastUiUpdateTime >= 200L) {
-                        lastUiUpdateTime = now
-                        _state.value = _state.value.copy(
-                            currentImageIndex = index + 1,
-                            currentImageName = item.name,
-                            detectedLabel = safeCategoryName,
-                            confidence = predictionConfidence,
-                            sortedSummary = summary.toMap(),
-                            availableRamMb = getAvailableRamMb()
-                        )
-                    }
+                        // UI Throttling: Update StateFlow at most once per 200ms or on completion
+                        val now = System.currentTimeMillis()
+                        val isFirstOrLast = index == 0 || index == totalCount - 1
+                        if (isFirstOrLast || now - lastUiUpdateTime >= 200L) {
+                            lastUiUpdateTime = now
+                            _state.value = _state.value.copy(
+                                currentImageIndex = index + 1,
+                                currentImageName = item.name,
+                                detectedLabel = safeCategoryName,
+                                confidence = predictionConfidence,
+                                sortedSummary = summary.toMap(),
+                                availableRamMb = getAvailableRamMb()
+                            )
+                        }
 
-                    // Milestone logging (log first 5, then every 25 images to avoid log array bloat)
-                    if (index < 5 || (index + 1) % 25 == 0 || index == totalCount - 1) {
-                        val pct = String.format(Locale.US, "%.1f%%", predictionConfidence * 100)
-                        if (isFaceModel) {
-                            if (rawLabel == "Unknown Person") {
-                                addLog("👤 [${index + 1}/$totalCount] ${item.name} ➔ Unrecognized Face ($pct) ➔ /$safeCategoryName")
-                            } else if (rawLabel == "No Face Detected") {
-                                addLog("📁 [${index + 1}/$totalCount] ${item.name} ➔ No Face Detected ➔ /$safeCategoryName")
+                        // Milestone logging (log first 5, then every 25 images to avoid log array bloat)
+                        if (index < 5 || (index + 1) % 25 == 0 || index == totalCount - 1) {
+                            val pct = String.format(Locale.US, "%.1f%%", predictionConfidence * 100)
+                            if (isFaceModel) {
+                                if (rawLabel == "Unknown Person") {
+                                    addLog("👤 [${index + 1}/$totalCount] ${item.name} ➔ Unrecognized Face ($pct) ➔ /$safeCategoryName")
+                                } else if (rawLabel == "No Face Detected") {
+                                    addLog("📁 [${index + 1}/$totalCount] ${item.name} ➔ No Face Detected ➔ /$safeCategoryName")
+                                } else {
+                                    addLog("✅ [${index + 1}/$totalCount] ${item.name} ➔ '$safeCategoryName' ($pct)")
+                                }
                             } else {
                                 addLog("✅ [${index + 1}/$totalCount] ${item.name} ➔ '$safeCategoryName' ($pct)")
                             }
-                        } else {
-                            addLog("✅ [${index + 1}/$totalCount] ${item.name} ➔ '$safeCategoryName' ($pct)")
                         }
+                    } catch (photoErr: Throwable) {
+                        skippedCount++
+                        AppLogger.w("BatchFolderSorter", "Error processing photo '${item.name}': ${photoErr.message}")
+                        addLog("⚠️ Skipped '${item.name}' due to error: ${photoErr.message ?: "Processing error"}")
+                        _state.value = _state.value.copy(
+                            currentImageIndex = index + 1,
+                            currentImageName = item.name,
+                            skippedCount = skippedCount
+                        )
                     }
                 }
 
                 if (isActive && _state.value.isRunning && !_state.value.isPaused) {
-                    val skippedMsg = if (skippedCount > 0) ", $skippedCount photos skipped (no face detected)" else ""
+                    val skippedMsg = if (skippedCount > 0) ", $skippedCount photos skipped (no face detected or unreadable)" else ""
                     addLog("🎉 Sorting complete! Processed ${_state.value.currentImageIndex} photos. Sorted ${summary.values.sum()} photos into ${summary.size} category folders$skippedMsg.")
                     _state.value = _state.value.copy(
                         currentImageIndex = totalCount,
@@ -837,16 +865,22 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
 
     private fun getAvailableStorageGb(pathOrUri: String): Float {
         return try {
-            val targetDir = if (pathOrUri.startsWith("content://")) {
-                appContext.filesDir
-            } else {
+            val targetDir = if (pathOrUri.isNotBlank() && !pathOrUri.startsWith("content://") && File(pathOrUri).exists()) {
                 File(pathOrUri)
+            } else {
+                appContext.getExternalFilesDir(null) ?: appContext.filesDir ?: android.os.Environment.getDataDirectory()
             }
             val stat = StatFs(targetDir.absolutePath)
             val availableBytes = stat.availableBlocksLong * stat.blockSizeLong
-            (availableBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)).toFloat()
+            (availableBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)).toFloat().coerceAtLeast(0.01f)
         } catch (_: Exception) {
-            0f
+            try {
+                val stat = StatFs(android.os.Environment.getDataDirectory().absolutePath)
+                val availableBytes = stat.availableBlocksLong * stat.blockSizeLong
+                (availableBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)).toFloat().coerceAtLeast(0.01f)
+            } catch (_: Exception) {
+                15.0f // safe fallback in GB so sorting is never falsely blocked
+            }
         }
     }
 

@@ -2268,7 +2268,49 @@ fun TrainerSettingsScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // 5. Action Controls (Start / Pause / Resume / Stop)
+                        // 5. Action Controls (Start / Pause / Resume / Stop / Restart)
+                        val triggerBatchSort: (Int) -> Unit = { resumeFrom ->
+                            if (sorterModelSource == SorterModelSource.APP_PROJECT) {
+                                val proj = selectedProjectForSorter
+                                if (proj == null) {
+                                    Toast.makeText(context, "Please select an AI model first!", Toast.LENGTH_SHORT).show()
+                                } else if (!proj.isTrained) {
+                                    Toast.makeText(context, "Selected model '${proj.name}' is not trained yet! Please train it first.", Toast.LENGTH_LONG).show()
+                                } else {
+                                    batchSorter.startSorting(
+                                        projectId = proj.id,
+                                        projectName = proj.name,
+                                        sourceUriOrPath = sourceUriOrPath,
+                                        sourceDisplayName = sourceDisplayName,
+                                        destinationUriOrPath = destUriOrPath,
+                                        destinationDisplayName = destDisplayName,
+                                        repository = viewModel.getRepository(),
+                                        fileAction = selectedFileAction,
+                                        pacingMode = selectedPacingMode,
+                                        skipIfNoFaceDetected = skipIfNoFaceDetected,
+                                        resumeFromIndex = resumeFrom
+                                    )
+                                }
+                            } else {
+                                val customModel = loadedCustomModel
+                                if (customModel == null) {
+                                    Toast.makeText(context, "Please select or import a model file first!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    batchSorter.startSortingWithCustomModel(
+                                        customModel = customModel,
+                                        sourceUriOrPath = sourceUriOrPath,
+                                        sourceDisplayName = sourceDisplayName,
+                                        destinationUriOrPath = destUriOrPath,
+                                        destinationDisplayName = destDisplayName,
+                                        fileAction = selectedFileAction,
+                                        pacingMode = selectedPacingMode,
+                                        skipIfNoFaceDetected = skipIfNoFaceDetected,
+                                        resumeFromIndex = resumeFrom
+                                    )
+                                }
+                            }
+                        }
+
                         if (batchSortState.isRunning) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2313,49 +2355,51 @@ fun TrainerSettingsScreen(
                                     Text("Stop")
                                 }
                             }
+                        } else if (batchSortState.currentImageIndex > 0 && !batchSortState.isCompleted && batchSortState.currentImageIndex < batchSortState.totalImages) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { triggerBatchSort(batchSortState.currentImageIndex) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Resume Sorting (from photo #${batchSortState.currentImageIndex + 1})")
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { triggerBatchSort(0) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Restart from Photo #1", fontSize = 11.5.sp)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { batchSorter.resetState() },
+                                        modifier = Modifier.weight(1f),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Reset Progress", fontSize = 11.5.sp)
+                                    }
+                                }
+                            }
                         } else {
                             Button(
-                                onClick = {
-                                    if (sorterModelSource == SorterModelSource.APP_PROJECT) {
-                                        val proj = selectedProjectForSorter
-                                        if (proj == null) {
-                                            Toast.makeText(context, "Please select an AI model first!", Toast.LENGTH_SHORT).show()
-                                            return@Button
-                                        }
-                                        if (!proj.isTrained) {
-                                            Toast.makeText(context, "Selected model '${proj.name}' is not trained yet! Please train it first.", Toast.LENGTH_LONG).show()
-                                            return@Button
-                                        }
-                                        batchSorter.startSorting(
-                                            projectId = proj.id,
-                                            projectName = proj.name,
-                                            sourceUriOrPath = sourceUriOrPath,
-                                            sourceDisplayName = sourceDisplayName,
-                                            destinationUriOrPath = destUriOrPath,
-                                            destinationDisplayName = destDisplayName,
-                                            repository = viewModel.getRepository(),
-                                            fileAction = selectedFileAction,
-                                            pacingMode = selectedPacingMode,
-                                            skipIfNoFaceDetected = skipIfNoFaceDetected
-                                        )
-                                    } else {
-                                        val customModel = loadedCustomModel
-                                        if (customModel == null) {
-                                            Toast.makeText(context, "Please select or import a model file first!", Toast.LENGTH_SHORT).show()
-                                            return@Button
-                                        }
-                                        batchSorter.startSortingWithCustomModel(
-                                            customModel = customModel,
-                                            sourceUriOrPath = sourceUriOrPath,
-                                            sourceDisplayName = sourceDisplayName,
-                                            destinationUriOrPath = destUriOrPath,
-                                            destinationDisplayName = destDisplayName,
-                                            fileAction = selectedFileAction,
-                                            pacingMode = selectedPacingMode,
-                                            skipIfNoFaceDetected = skipIfNoFaceDetected
-                                        )
-                                    }
-                                },
+                                onClick = { triggerBatchSort(0) },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
