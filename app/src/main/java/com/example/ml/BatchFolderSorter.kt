@@ -15,6 +15,7 @@ import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
 import com.example.data.repository.ProjectRepository
 import com.example.util.AppLogger
+import com.example.util.ImageUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -521,26 +522,11 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                         delay(pacingDelayMs)
                     }
 
-                    // Decode with gentle downsampling to preserve facial features while saving RAM
-                    val decodeBoundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    item.openStream(appContext)?.use {
-                        BitmapFactory.decodeStream(it, null, decodeBoundsOpts)
-                    }
-
-                    val maxDim = maxOf(decodeBoundsOpts.outWidth, decodeBoundsOpts.outHeight)
-                    var sampleSize = 1
-                    while (maxDim / (sampleSize * 2) >= 640) {
-                        sampleSize *= 2
-                    }
-
-                    val actualOpts = BitmapFactory.Options().apply {
-                        inSampleSize = sampleSize
-                        inPreferredConfig = Bitmap.Config.ARGB_8888 // Full 32-bit true color for 100% feature extraction accuracy matching training
-                    }
-
-                    val bitmap = item.openStream(appContext)?.use {
-                        BitmapFactory.decodeStream(it, null, actualOpts)
-                    }
+                    // Decode with automatic EXIF orientation correction so portrait photos are never sideways
+                    val bitmap = ImageUtils.decodeOrientedBitmapFromStream(
+                        inputStreamProvider = { item.openStream(appContext) },
+                        maxDim = 1280
+                    )
 
                     if (bitmap == null) {
                         skippedCount++
@@ -566,27 +552,40 @@ class BatchFolderSorter private constructor(private val appContext: Context) {
                             maxPersons = 1
                         )
 
-                        if (identified.isEmpty()) {
-                            if (skipIfNoFaceDetected) {
-                                bitmap.recycle()
-                                skippedCount++
-                                addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
-                                _state.value = _state.value.copy(
-                                    currentImageIndex = index + 1,
-                                    currentImageName = item.name,
-                                    detectedLabel = "Skipped (No Face Detected)",
-                                    confidence = 0f,
-                                    skippedCount = skippedCount
-                                )
-                                continue
-                            } else {
-                                rawLabel = "No Face Detected"
-                                predictionConfidence = 0f
-                            }
-                        } else {
+                        if (identified.isNotEmpty()) {
                             val topPerson = identified[0]
                             rawLabel = topPerson.personName
                             predictionConfidence = topPerson.confidence
+                        } else {
+                            // Secondary safety verification: check if any face was detected even if not matching enrolled persons
+                            val fallbackFaces = faceEngine.detectFaces(bitmap, maxFaces = 1)
+                            if (fallbackFaces.isNotEmpty()) {
+                                rawLabel = "Unknown Person"
+                                predictionConfidence = fallbackFaces[0].confidence
+                            } else {
+                                val fallbackBodies = faceEngine.detectHumanBodies(bitmap, maxBodies = 1)
+                                if (fallbackBodies.isNotEmpty()) {
+                                    rawLabel = "Unknown Person"
+                                    predictionConfidence = 0.50f
+                                } else {
+                                    if (skipIfNoFaceDetected) {
+                                        bitmap.recycle()
+                                        skippedCount++
+                                        addLog("⏭️ [Skipped] No human or face detected in '${item.name}', moving to next photo...")
+                                        _state.value = _state.value.copy(
+                                            currentImageIndex = index + 1,
+                                            currentImageName = item.name,
+                                            detectedLabel = "Skipped (No Face Detected)",
+                                            confidence = 0f,
+                                            skippedCount = skippedCount
+                                        )
+                                        continue
+                                    } else {
+                                        rawLabel = "No Face Detected"
+                                        predictionConfidence = 0f
+                                    }
+                                }
+                            }
                         }
                     } else {
                         // Standard Image Classification check for face / human filter if enabled

@@ -8,6 +8,7 @@ import com.example.data.db.ProjectEntity
 import com.example.data.repository.ProjectRepository
 import com.example.ml.PredictionResult
 import com.example.util.AppLogger
+import com.example.util.ImageUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -335,9 +336,7 @@ class TelegramBotService private constructor(private val appContext: Context) {
                         }
                     }
 
-                    val bis = BufferedInputStream(tempFile.inputStream())
-                    val bitmap = BitmapFactory.decodeStream(bis)
-                    bis.close()
+                    val bitmap = ImageUtils.decodeOrientedBitmap(tempFile, maxDim = 1280)
                     return@withContext Pair(tempFile, bitmap)
                 }
             }

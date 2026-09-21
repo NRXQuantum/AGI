@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PointF
 import android.media.FaceDetector
+import com.example.util.ImageUtils
 import com.example.data.db.AppDatabase
 import com.example.data.db.ClassificationClassEntity
 import com.example.data.db.ImageSampleEntity
@@ -88,16 +89,16 @@ class FaceRecognitionEngine(private val context: Context) {
     private val tfliteDetector: TFLiteObjectDetector by lazy {
         TFLiteObjectDetector(context)
     }
-    private val bodySegmenter: PersonBodySegmenter by lazy {
-        PersonBodySegmenter(isStreamMode = false)
-    }
 
     /**
-     * Multi-Scale High-Precision Face Detector.
-     * Operates across native and downsampled resolution pyramids so that close-up selfies (large eyes),
-     * medium portraits, and distant faces are all detected reliably.
+     * High-Precision Face Detector powered by Multi-Scale Pyramid Android FaceDetector.
+     * Completely local, offline, and independent of Google Play Services (GMS-free).
      */
     fun detectFaces(bitmap: Bitmap, maxFaces: Int = 10): List<FaceBoundingBox> {
+        return detectFacesLegacyFallback(bitmap, maxFaces)
+    }
+
+    private fun detectFacesLegacyFallback(bitmap: Bitmap, maxFaces: Int = 10): List<FaceBoundingBox> {
         val width = bitmap.width
         val height = bitmap.height
         if (width < 32 || height < 32) return emptyList()
@@ -244,10 +245,14 @@ class FaceRecognitionEngine(private val context: Context) {
 
     /**
      * Analyzes head posture, angles, and face centering for smart auto-guided capture.
-     * Requires genuine biometric facial geometry (eyes detected) to prevent false triggering on pages/walls.
+     * Uses Android platform FaceDetector with Euler angles and facial geometry.
      * @param targetStep 1 (Straight), 2 (Turn Left), 3 (Turn Right), 4 (Tilt Up), 5 (Smile/Expression)
      */
     fun analyzeFacePose(bitmap: Bitmap, targetStep: Int): FacePoseAnalysis {
+        return analyzeFacePoseLegacy(bitmap, targetStep)
+    }
+
+    private fun analyzeFacePoseLegacy(bitmap: Bitmap, targetStep: Int): FacePoseAnalysis {
         val width = bitmap.width
         val height = bitmap.height
         if (width < 32 || height < 32) {
@@ -481,15 +486,15 @@ class FaceRecognitionEngine(private val context: Context) {
         val stdDev = if (variance > 0) sqrt(variance) else 0.0
 
         // Real human faces have rich tonal shading (eyes, lips, nose, skin).
-        // Flat app icons, single-color shapes, solid cards have stdDev < 5.0.
-        // Beauty filters or soft focus typically produce stdDev 7.0 - 18.0.
-        // We set threshold to 6.0 to welcome real faces with smoothing filters while firmly rejecting flat icons / logos!
-        if (stdDev < 6.0) {
+        // Flat app icons, single-color shapes, solid cards have stdDev < 2.0.
+        // Beauty filters or soft focus typically produce stdDev 3.5 - 18.0.
+        // We set threshold to 3.0 to welcome real faces with smoothing filters while firmly rejecting flat icons / logos!
+        if (stdDev < 3.0) {
             return false
         }
 
-        // If over 70% of the crop is hypersaturated neon/primary color, it's a vector graphic/logo, not human skin
-        if (highSaturationCount.toFloat() / totalPixels > 0.70f) {
+        // If over 85% of the crop is hypersaturated neon/primary color, it's a vector graphic/logo, not human skin
+        if (highSaturationCount.toFloat() / totalPixels > 0.85f) {
             return false
         }
 
@@ -1036,17 +1041,7 @@ class FaceRecognitionEngine(private val context: Context) {
         val w = (r - l).coerceAtLeast(0.01f)
         val h = (b - t).coerceAtLeast(0.01f)
 
-        // 1. Primary Neural Human Segmentation: ML Kit Selfie Segmentation detects hands, raised arms, gestures, and true silhouettes
-        if (bitmap != null && !bitmap.isRecycled && bitmap.width > 16 && bitmap.height > 16) {
-            try {
-                val (mlContour, mlDiag) = bodySegmenter.extractBodyContourSync(bitmap, box)
-                if (mlContour.isNotEmpty()) {
-                    return Pair(mlContour, mlDiag)
-                }
-            } catch (_: Throwable) {}
-        }
-
-        // 2. Fallback: image-aware adaptive boundary scanning
+        // 1. Primary: image-aware adaptive boundary scanning
         if (bitmap != null && !bitmap.isRecycled && bitmap.width > 10 && bitmap.height > 10) {
             try {
                 val bmpW = bitmap.width
@@ -1494,9 +1489,6 @@ class FaceRecognitionEngine(private val context: Context) {
         featureExtractor.close()
         try {
             tfliteDetector.close()
-        } catch (_: Throwable) {}
-        try {
-            bodySegmenter.close()
         } catch (_: Throwable) {}
     }
 }

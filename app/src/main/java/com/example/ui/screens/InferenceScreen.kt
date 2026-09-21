@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.widget.Toast
+import com.example.util.ImageUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -111,9 +112,7 @@ fun InferenceScreen(
         if (uri != null) {
             try {
                 AppLogger.i("InferenceScreen", "Selected test image from gallery: $uri")
-                val inputStream = context.contentResolver.openInputStream(uri)
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream?.close()
+                val bitmap = ImageUtils.decodeOrientedBitmap(context, uri)
                 if (bitmap != null) {
                     testBitmap = bitmap
                     selectedHighlightIndex = null
@@ -139,9 +138,7 @@ fun InferenceScreen(
     ) { success ->
         if (success && currentCameraUri != null) {
             try {
-                val inputStream = context.contentResolver.openInputStream(currentCameraUri!!)
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream?.close()
+                val bitmap = ImageUtils.decodeOrientedBitmap(context, currentCameraUri!!)
                 if (bitmap != null) {
                     testBitmap = bitmap
                     selectedHighlightIndex = null

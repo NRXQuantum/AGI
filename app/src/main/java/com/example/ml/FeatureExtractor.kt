@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import com.example.util.ImageUtils
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import java.io.File
@@ -100,7 +101,9 @@ class FeatureExtractor(
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
 
-            val decodedBitmap = BitmapFactory.decodeFile(file.absolutePath, decodeOptions) ?: return null
+            val rawBitmap = BitmapFactory.decodeFile(file.absolutePath, decodeOptions) ?: return null
+            val orientation = ImageUtils.getExifOrientation(file)
+            val decodedBitmap = ImageUtils.applyExifOrientation(rawBitmap, orientation)
             val features = extractFeatures(decodedBitmap)
             decodedBitmap.recycle()
             return features
