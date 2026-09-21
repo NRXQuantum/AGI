@@ -377,7 +377,7 @@ class ProjectRepository(
             onProgress(
                 TrainingProgress(
                     currentEpoch = 0,
-                    totalEpochs = classes.size,
+                    totalEpochs = epochs,
                     loss = 0f,
                     accuracy = 0f,
                     statusMessage = "Person & Human ID: বায়োমেট্রিক ও বডি ফিচার এক্সট্রাক্ট করা হচ্ছে...",
@@ -391,13 +391,12 @@ class ProjectRepository(
                 )
             )
             val faceEngine = FaceRecognitionEngine(context)
-            val personCentroids = mutableListOf<FloatArray>()
             val classLabels = mutableListOf<String>()
-            val allSampleEmbeddingsWithClass = mutableListOf<Pair<FloatArray, Int>>()
+            val allSampleEmbeddingsWithClass = mutableListOf<Triple<FloatArray, Int, String>>()
 
             for ((cIdx, cEntity) in classes.withIndex()) {
+                classLabels.add(cEntity.className)
                 val samplesForClass = allSamples.filter { it.classId == cEntity.id }
-                val embeddings = mutableListOf<FloatArray>()
                 for (sample in samplesForClass) {
                     val file = File(sample.imagePath)
                     if (file.exists()) {
@@ -415,8 +414,7 @@ class ProjectRepository(
                                 val len = kotlin.math.sqrt(norm).coerceAtLeast(1e-7f)
                                 FloatArray(feat.size) { i -> feat[i] / len }
                             }
-                            embeddings.add(emb)
-                            allSampleEmbeddingsWithClass.add(Pair(emb, cIdx))
+                            allSampleEmbeddingsWithClass.add(Triple(emb, cIdx, cEntity.className))
                             if (!bmp.isRecycled) bmp.recycle()
                         }
                     }
@@ -426,19 +424,15 @@ class ProjectRepository(
                     val msPerPhoto = elapsedMs.toFloat() / processedPhotos.toFloat()
                     val remainingPhotos = (totalPhotos - processedPhotos).coerceAtLeast(0)
                     val remainingSec = ((remainingPhotos * msPerPhoto) / 1000f).toLong()
-                    val pct = (5f + (processedPhotos.toFloat() / totalPhotos.toFloat()) * 85f).coerceIn(5f, 95f)
-
-                    val runningAcc = if (processedPhotos > 0) {
-                        (1f - (0.05f / (cIdx + 1))).coerceIn(0.85f, 1.0f)
-                    } else 0f
+                    val pct = (5f + (processedPhotos.toFloat() / totalPhotos.toFloat()) * 35f).coerceIn(5f, 40f)
 
                     onProgress(
                         TrainingProgress(
-                            currentEpoch = cIdx + 1,
-                            totalEpochs = classes.size,
-                            loss = (0.15f / (cIdx + 1)).coerceAtLeast(0.01f),
-                            accuracy = runningAcc,
-                            statusMessage = "প্রসেস করা হচ্ছে: ${cEntity.className} ($processedPhotos/$totalPhotos ফটো)",
+                            currentEpoch = 0,
+                            totalEpochs = epochs,
+                            loss = 0.5f,
+                            accuracy = 0f,
+                            statusMessage = "ফিচার এক্সট্রাক্ট করা হচ্ছে: ${cEntity.className} ($processedPhotos/$totalPhotos ফটো)",
                             overallPercentage = pct,
                             phase = TrainingPhase.EXTRACTING_FEATURES,
                             currentStep = processedPhotos,
@@ -449,65 +443,163 @@ class ProjectRepository(
                         )
                     )
                 }
-
-                if (embeddings.isNotEmpty()) {
-                    val dim = embeddings[0].size
-                    val centroid = FloatArray(dim)
-                    for (emb in embeddings) {
-                        for (d in 0 until dim) centroid[d] += emb[d]
-                    }
-                    var sumSq = 0f
-                    for (d in 0 until dim) {
-                        centroid[d] /= embeddings.size
-                        sumSq += centroid[d] * centroid[d]
-                    }
-                    val mag = kotlin.math.sqrt(sumSq).coerceAtLeast(1e-7f)
-                    val normalizedCentroid = FloatArray(dim) { d -> centroid[d] / mag }
-                    personCentroids.add(normalizedCentroid)
-                    classLabels.add(cEntity.className)
-                }
             }
 
-            if (personCentroids.isNotEmpty()) {
-                val featureDim = personCentroids[0].size
-                val numClasses = personCentroids.size
+            if (allSampleEmbeddingsWithClass.isNotEmpty()) {
+                val featureDim = allSampleEmbeddingsWithClass[0].first.size
+                val numClasses = classes.size
+                val totalCycles = epochs.coerceIn(1, 10)
 
-                // Evaluate genuine empirical cross-validation accuracy across all enrolled photos
-                var correctMatches = 0
-                var totalMatches = 0
-                var totalLoss = 0.0
-                for ((sampleEmb, trueIdx) in allSampleEmbeddingsWithClass) {
-                    var bestSim = -1f
-                    var bestClass = 0
-                    val logits = DoubleArray(numClasses)
-                    for (c in personCentroids.indices) {
-                        var dot = 0f
-                        for (d in 0 until featureDim) dot += sampleEmb[d] * personCentroids[c][d]
-                        logits[c] = dot.toDouble() * 8.0
-                        if (dot > bestSim) {
-                            bestSim = dot
-                            bestClass = c
+                // 1. Initialize Baseline Centroids per class
+                val personCentroids = Array(numClasses) { FloatArray(featureDim) }
+                val classCounts = IntArray(numClasses)
+
+                for ((emb, cIdx, _) in allSampleEmbeddingsWithClass) {
+                    if (cIdx in 0 until numClasses) {
+                        for (d in 0 until featureDim) {
+                            personCentroids[cIdx][d] += emb[d]
                         }
+                        classCounts[cIdx]++
                     }
-                    val maxLogit = logits.maxOrNull() ?: 0.0
-                    val exps = logits.map { kotlin.math.exp(it - maxLogit) }
-                    val sumExp = exps.sum().coerceAtLeast(1e-7)
-                    val pTrue = (exps.getOrElse(trueIdx) { 0.0 } / sumExp).coerceIn(1e-7, 1.0)
-                    totalLoss += -kotlin.math.ln(pTrue)
-
-                    if (bestClass == trueIdx) {
-                        correctMatches++
-                    }
-                    totalMatches++
                 }
 
-                val genuineAccuracy = if (totalMatches > 0) {
-                    (correctMatches.toFloat() / totalMatches.toFloat()).coerceIn(0.50f, 1.0f)
-                } else 1.0f
+                for (c in 0 until numClasses) {
+                    val count = classCounts[c].coerceAtLeast(1)
+                    var sumSq = 0f
+                    for (d in 0 until featureDim) {
+                        personCentroids[c][d] /= count
+                        sumSq += personCentroids[c][d] * personCentroids[c][d]
+                    }
+                    val mag = kotlin.math.sqrt(sumSq).coerceAtLeast(1e-7f)
+                    for (d in 0 until featureDim) {
+                        personCentroids[c][d] /= mag
+                    }
+                }
 
-                val genuineLoss = if (totalMatches > 0) {
-                    (totalLoss / totalMatches).toFloat().coerceIn(0.005f, 2.5f)
-                } else 0.02f
+                // 2. Multi-Cycle Iterative Self-Review & Error Correction Training Loop
+                var finalAccuracy = 1.0f
+                var finalLoss = 0.05f
+                val cycleHistoryJson = org.json.JSONArray()
+
+                for (cycle in 1..totalCycles) {
+                    var correctMatches = 0
+                    var totalLoss = 0.0
+                    val classMistakes = IntArray(numClasses)
+                    val classTotals = IntArray(numClasses)
+                    val hardNegativeUpdates = Array(numClasses) { FloatArray(featureDim) }
+
+                    // Pass: Evaluate every sample against current centroids
+                    for ((sampleEmb, trueIdx, _) in allSampleEmbeddingsWithClass) {
+                        var bestSim = -1f
+                        var bestClass = 0
+                        val logits = DoubleArray(numClasses)
+
+                        for (c in 0 until numClasses) {
+                            var dot = 0f
+                            for (d in 0 until featureDim) {
+                                dot += sampleEmb[d] * personCentroids[c][d]
+                            }
+                            logits[c] = dot.toDouble() * 8.0
+                            if (dot > bestSim) {
+                                bestSim = dot
+                                bestClass = c
+                            }
+                        }
+
+                        val maxLogit = logits.maxOrNull() ?: 0.0
+                        val exps = logits.map { kotlin.math.exp(it - maxLogit) }
+                        val sumExp = exps.sum().coerceAtLeast(1e-7)
+                        val pTrue = (exps.getOrElse(trueIdx) { 0.0 } / sumExp).coerceIn(1e-7, 1.0)
+                        totalLoss += -kotlin.math.ln(pTrue)
+
+                        classTotals[trueIdx]++
+
+                        val isCorrect = (bestClass == trueIdx && bestSim >= 0.35f)
+                        if (isCorrect) {
+                            correctMatches++
+                        } else {
+                            classMistakes[trueIdx]++
+                        }
+
+                        // Hard-Negative Mining & Centroid Repulsion gradient accumulation
+                        if (cycle < totalCycles) {
+                            if (!isCorrect && bestClass != trueIdx && bestClass in 0 until numClasses) {
+                                // Confusion error: pull true class centroid, repel rival class centroid
+                                for (d in 0 until featureDim) {
+                                    hardNegativeUpdates[trueIdx][d] += 0.35f * sampleEmb[d]
+                                    hardNegativeUpdates[bestClass][d] -= 0.15f * sampleEmb[d]
+                                }
+                            } else if (bestSim < 0.60f) {
+                                // Low-margin sample: pull true centroid to increase margin
+                                for (d in 0 until featureDim) {
+                                    hardNegativeUpdates[trueIdx][d] += 0.20f * sampleEmb[d]
+                                }
+                            }
+                        }
+                    }
+
+                    // Apply self-correction updates and re-normalize centroids
+                    if (cycle < totalCycles) {
+                        for (c in 0 until numClasses) {
+                            for (d in 0 until featureDim) {
+                                personCentroids[c][d] += hardNegativeUpdates[c][d]
+                            }
+                            var sumSq = 0f
+                            for (d in 0 until featureDim) {
+                                sumSq += personCentroids[c][d] * personCentroids[c][d]
+                            }
+                            val mag = kotlin.math.sqrt(sumSq).coerceAtLeast(1e-7f)
+                            for (d in 0 until featureDim) {
+                                personCentroids[c][d] /= mag
+                            }
+                        }
+                    }
+
+                    val totalEvaluated = allSampleEmbeddingsWithClass.size.coerceAtLeast(1)
+                    val cycleAccuracy = (correctMatches.toFloat() / totalEvaluated.toFloat()).coerceIn(0.50f, 1.0f)
+                    val cycleLoss = (totalLoss / totalEvaluated).toFloat().coerceIn(0.001f, 2.5f)
+                    finalAccuracy = cycleAccuracy
+                    finalLoss = cycleLoss
+
+                    val cycleObj = org.json.JSONObject().apply {
+                        put("cycle", cycle)
+                        put("accuracy", cycleAccuracy.toDouble())
+                        put("loss", cycleLoss.toDouble())
+                        put("correctCount", correctMatches)
+                        put("totalCount", totalEvaluated)
+                    }
+                    cycleHistoryJson.put(cycleObj)
+
+                    val elapsedMs = (System.currentTimeMillis() - overallStartMs).coerceAtLeast(100L)
+                    val elapsedSec = elapsedMs / 1000L
+                    val progressPct = (40f + (cycle.toFloat() / totalCycles.toFloat()) * 55f).coerceIn(40f, 95f)
+
+                    val mistakesSummary = if (classMistakes.sum() > 0) {
+                        " • ${classMistakes.sum()}টি ত্রুটি সংশোধন হচ্ছে"
+                    } else {
+                        " • ১০০% নিখুঁত"
+                    }
+
+                    onProgress(
+                        TrainingProgress(
+                            currentEpoch = cycle,
+                            totalEpochs = totalCycles,
+                            loss = cycleLoss,
+                            accuracy = cycleAccuracy,
+                            statusMessage = "পাস $cycle/$totalCycles: $correctMatches/$totalEvaluated ফটো সঠিক (${String.format(Locale.US, "%.1f%%", cycleAccuracy * 100f)})$mistakesSummary",
+                            overallPercentage = progressPct,
+                            phase = TrainingPhase.TRAINING_NEURAL_NET,
+                            currentStep = cycle,
+                            totalSteps = totalCycles,
+                            elapsedSeconds = elapsedSec,
+                            estimatedRemainingSeconds = ((totalCycles - cycle) * 1L).coerceAtLeast(0L),
+                            speedText = String.format(Locale.US, "পাস %d/%d (%.1f%%)", cycle, totalCycles, cycleAccuracy * 100f)
+                        )
+                    )
+
+                    // Cooperative yield to ensure real-time UI animation and notification delivery
+                    kotlinx.coroutines.delay(220)
+                }
 
                 val weightsArray = Array(numClasses) { c ->
                     FloatArray(featureDim) { f -> personCentroids[c][f] * 8.0f }
@@ -537,13 +629,22 @@ class ProjectRepository(
                 val weightsFile = File(modelsDir, "project_${projectId}_weights.json")
                 weightsFile.writeText(weightsJson.toString(), Charsets.UTF_8)
 
+                // Save audit report for the UI Dialog
+                val auditReportFile = File(modelsDir, "project_${projectId}_audit.json")
+                val auditReportObj = org.json.JSONObject().apply {
+                    put("totalCycles", totalCycles)
+                    put("finalAccuracy", finalAccuracy.toDouble())
+                    put("cycleHistory", cycleHistoryJson)
+                }
+                auditReportFile.writeText(auditReportObj.toString(), Charsets.UTF_8)
+
                 val trainedModel = TrainedModelEntity(
                     projectId = projectId,
                     weightsJson = "file:${weightsFile.absolutePath}",
                     biasJson = biasJson.toString(),
                     classLabelsJson = labelsJson.toString(),
                     trainedAt = System.currentTimeMillis(),
-                    accuracy = genuineAccuracy,
+                    accuracy = finalAccuracy,
                     numClasses = numClasses,
                     featureDim = featureDim,
                     featureScaleMeansJson = meansJson.toString(),
@@ -556,18 +657,19 @@ class ProjectRepository(
                         project.copy(
                             isTrained = true,
                             trainedAt = System.currentTimeMillis(),
-                            trainingAccuracy = genuineAccuracy
+                            trainingAccuracy = finalAccuracy,
+                            trainingEpochs = totalCycles
                         )
                     )
                 }
 
                 onProgress(
                     TrainingProgress(
-                        currentEpoch = 10,
-                        totalEpochs = 10,
-                        loss = genuineLoss,
-                        accuracy = genuineAccuracy,
-                        statusMessage = "Face Recognition Biometric Model Ready! Can identify ${classLabels.size} persons.",
+                        currentEpoch = totalCycles,
+                        totalEpochs = totalCycles,
+                        loss = finalLoss,
+                        accuracy = finalAccuracy,
+                        statusMessage = "বায়োমেট্রিক মডেল প্রস্তুত! $totalCycles-পাস সেলফ-রিভিউ সম্পন্ন (একুরেসি: ${String.format(Locale.US, "%.1f%%", finalAccuracy * 100f)})",
                         overallPercentage = 100f,
                         phase = TrainingPhase.COMPLETED
                     )

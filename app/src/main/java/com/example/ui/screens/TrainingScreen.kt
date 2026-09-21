@@ -43,7 +43,10 @@ import com.example.ml.TrainingCycleProgress
 import com.example.ml.TrainingPhase
 import com.example.ui.viewmodel.ProjectViewModel
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -242,6 +245,7 @@ fun TrainingScreen(
     ) { innerPadding ->
         if (showAuditDetailsDialog) {
             BiometricAuditDetailsDialog(
+                projectId = project?.id,
                 classes = classes,
                 onDismiss = { showAuditDetailsDialog = false }
             )
@@ -388,18 +392,18 @@ fun TrainingScreen(
                         ) {
                             TrainingStatCard(
                                 modifier = Modifier.weight(1f),
-                                label = if (isFaceMode) "Distance Metric" else "Loss",
-                                value = if (isFaceMode) "Cosine L2" else (if (phase == TrainingPhase.EXTRACTING_FEATURES) "--" else String.format(Locale.US, "%.4f", progress?.loss ?: 0f)),
-                                subtext = if (isFaceMode) "512D Hypersphere" else (if (phase == TrainingPhase.EXTRACTING_FEATURES) "Pending Step 2" else "Cross-Entropy"),
+                                label = if (isFaceMode) "Margin Loss" else "Loss",
+                                value = if (phase == TrainingPhase.EXTRACTING_FEATURES) "--" else String.format(Locale.US, "%.4f", progress?.loss ?: 0f),
+                                subtext = if (isFaceMode) (if (phase == TrainingPhase.EXTRACTING_FEATURES) "বায়োমেট্রিক প্রস্তুতি" else "ত্রুটি সংশোধন লস") else (if (phase == TrainingPhase.EXTRACTING_FEATURES) "Pending Step 2" else "Cross-Entropy"),
                                 icon = if (isFaceMode) Icons.Default.Face else Icons.Default.TrendingDown,
                                 tint = if (isFaceMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                             )
 
                             TrainingStatCard(
                                 modifier = Modifier.weight(1f),
-                                label = if (isFaceMode) "Biometric ID" else "Accuracy",
-                                value = if (isFaceMode) "${classes.size} Persons" else (if (phase == TrainingPhase.EXTRACTING_FEATURES) "Prep..." else String.format(Locale.US, "%.1f%%", (progress?.accuracy ?: 0f) * 100)),
-                                subtext = if (isFaceMode) "Centroid Fusion" else (if (phase == TrainingPhase.EXTRACTING_FEATURES) "${progress?.currentStep ?: 0}/${progress?.totalSteps ?: 0} imgs" else "Epoch ${progress?.currentEpoch ?: 0}/${progress?.totalEpochs ?: epochs.toInt()}"),
+                                label = if (isFaceMode) "Accuracy (একুরেসি)" else "Accuracy",
+                                value = if (phase == TrainingPhase.EXTRACTING_FEATURES) "প্রস্তুতি..." else String.format(Locale.US, "%.1f%%", (progress?.accuracy ?: 0f) * 100),
+                                subtext = if (isFaceMode) (if (phase == TrainingPhase.EXTRACTING_FEATURES) "${progress?.currentStep ?: 0}/${progress?.totalSteps ?: 0} ফটো" else "পাস ${progress?.currentEpoch ?: 0}/${progress?.totalEpochs ?: epochs.toInt()}") else (if (phase == TrainingPhase.EXTRACTING_FEATURES) "${progress?.currentStep ?: 0}/${progress?.totalSteps ?: 0} imgs" else "Epoch ${progress?.currentEpoch ?: 0}/${progress?.totalEpochs ?: epochs.toInt()}"),
                                 icon = Icons.Default.CheckCircle,
                                 tint = Color(0xFF10B981)
                             )
@@ -1878,9 +1882,40 @@ fun BiometricFaceSettingsCard(
 
 @Composable
 fun BiometricAuditDetailsDialog(
+    projectId: Long?,
     classes: List<com.example.data.db.ClassificationClassEntity>,
     onDismiss: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val auditData = remember(projectId) {
+        if (projectId != null) {
+            try {
+                val modelsDir = File(context.filesDir, "trained_models")
+                val auditFile = File(modelsDir, "project_${projectId}_audit.json")
+                if (auditFile.exists()) {
+                    val json = org.json.JSONObject(auditFile.readText())
+                    val cyclesArr = json.optJSONArray("cycleHistory")
+                    val list = mutableListOf<Triple<Int, Float, Float>>()
+                    if (cyclesArr != null) {
+                        for (i in 0 until cyclesArr.length()) {
+                            val cObj = cyclesArr.getJSONObject(i)
+                            list.add(
+                                Triple(
+                                    cObj.optInt("cycle", i + 1),
+                                    cObj.optDouble("accuracy", 1.0).toFloat(),
+                                    cObj.optDouble("loss", 0.05).toFloat()
+                                )
+                            )
+                        }
+                    }
+                    list
+                } else null
+            } catch (_: Throwable) {
+                null
+            }
+        } else null
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1918,10 +1953,59 @@ fun BiometricAuditDetailsDialog(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "প্রশিক্ষণে ব্যবহৃত প্রতিটি ব্যক্তির ছবি স্বয়ংক্রিয়ভাবে অডিট করা হয়েছে। ফুল ও কৃত্রিম বস্তু বাদ দিয়ে নিখুঁত ফেস ও বডি সেন্ট্রয়েড তৈরি হয়েছে।",
+                            text = "প্রশিক্ষণে ব্যবহৃত প্রতিটি ব্যক্তির ছবি স্বয়ংক্রিয়ভাবে অডিট করা হয়েছে। প্রতিটি পাসে (Cycle) ভুল শনাক্ত করে মার্জিন রিপালশনের মাধ্যমে নিখুঁত ফেস ও বডি সেন্ট্রয়েড তৈরি হয়েছে।",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = Color(0xFF047857)
                         )
+                    }
+                }
+
+                if (!auditData.isNullOrEmpty()) {
+                    Text(
+                        text = "Self-Review Cycles Progression (পাস অগ্রগতি)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            auditData.forEach { (cycle, acc, loss) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "পাস $cycle (Cycle $cycle)",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Loss: ${String.format(Locale.US, "%.3f", loss)}",
+                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Surface(
+                                            color = if (acc >= 0.90f) Color(0xFF10B981).copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = String.format(Locale.US, "%.1f%% Accuracy", acc * 100f),
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 10.5.sp,
+                                                    color = if (acc >= 0.90f) Color(0xFF047857) else MaterialTheme.colorScheme.onPrimaryContainer
+                                                ),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
