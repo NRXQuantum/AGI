@@ -3101,63 +3101,77 @@ fun EnlargedPhotoViewerDialog(
 
                             // 2. High-Definition Target Bounding Box Overlays
                             if (showBoundingBox && detected.isNotEmpty()) {
-                                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                                    val fullW = maxWidth
-                                    val fullH = maxHeight
+                                detected.forEachIndexed { idx, obj ->
+                                    val activeColor = objectColors[idx % objectColors.size]
+                                    val left = renderedW * obj.boxLeftNorm.coerceIn(0f, 1f)
+                                    val top = renderedH * obj.boxTopNorm.coerceIn(0f, 1f)
+                                    val width = (renderedW * (obj.boxRightNorm - obj.boxLeftNorm)).coerceAtLeast(36.dp)
+                                    val height = (renderedH * (obj.boxBottomNorm - obj.boxTopNorm)).coerceAtLeast(36.dp)
+                                    val isNearTop = top < 22.dp
 
-                                    detected.forEachIndexed { idx, obj ->
-                                        val activeColor = objectColors[idx % objectColors.size]
-                                        val left = (obj.boxLeftNorm.coerceIn(0f, 1f) * fullW.value).dp
-                                        val top = (obj.boxTopNorm.coerceIn(0f, 1f) * fullH.value).dp
-                                        val width = (((obj.boxRightNorm - obj.boxLeftNorm).coerceIn(0.04f, 1f)) * fullW.value).dp
-                                        val height = (((obj.boxBottomNorm - obj.boxTopNorm).coerceIn(0.04f, 1f)) * fullH.value).dp
-                                        val isNearTop = obj.boxTopNorm < 0.12f
+                                    Box(
+                                        modifier = Modifier
+                                            .absoluteOffset(x = left, y = top)
+                                            .size(width = width, height = height)
+                                    ) {
+                                        Canvas(modifier = Modifier.fillMaxSize()) {
+                                            val strokeW = 2.5.dp.toPx()
+                                            val bracketLen = (8.dp.toPx()).coerceAtMost(size.minDimension / 4f)
 
-                                        Box(
+                                            drawRect(
+                                                color = activeColor.copy(alpha = 0.15f),
+                                                size = size
+                                            )
+
+                                            // 4 Corner brackets
+                                            drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(bracketLen, 0f), strokeWidth = strokeW)
+                                            drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(0f, bracketLen), strokeWidth = strokeW)
+                                            drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width - bracketLen, 0f), strokeWidth = strokeW)
+                                            drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width, bracketLen), strokeWidth = strokeW)
+                                            drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(bracketLen, size.height), strokeWidth = strokeW)
+                                            drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(0f, size.height - bracketLen), strokeWidth = strokeW)
+                                            drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width - bracketLen, size.height), strokeWidth = strokeW)
+                                            drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width, size.height - bracketLen), strokeWidth = strokeW)
+
+                                            // Center crosshair & pinpoint
+                                            val cx = size.width / 2f
+                                            val cy = size.height / 2f
+                                            val ringRad = 7.dp.toPx().coerceAtMost(size.minDimension / 5f)
+                                            val tickLen = 4.dp.toPx()
+
+                                            drawCircle(
+                                                color = activeColor.copy(alpha = 0.9f),
+                                                radius = ringRad,
+                                                center = Offset(cx, cy),
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
+                                            )
+                                            drawLine(color = activeColor, start = Offset(cx - ringRad - tickLen, cy), end = Offset(cx - ringRad + 1f, cy), strokeWidth = 1.5.dp.toPx())
+                                            drawLine(color = activeColor, start = Offset(cx + ringRad - 1f, cy), end = Offset(cx + ringRad + tickLen, cy), strokeWidth = 1.5.dp.toPx())
+                                            drawLine(color = activeColor, start = Offset(cx, cy - ringRad - tickLen), end = Offset(cx, cy - ringRad + 1f), strokeWidth = 1.5.dp.toPx())
+                                            drawLine(color = activeColor, start = Offset(cx, cy + ringRad - 1f), end = Offset(cx, cy + ringRad + tickLen), strokeWidth = 1.5.dp.toPx())
+                                            drawCircle(color = Color.White, radius = 2.5.dp.toPx(), center = Offset(cx, cy))
+                                            drawCircle(color = activeColor, radius = 1.2.dp.toPx(), center = Offset(cx, cy))
+                                        }
+
+                                        // Label Badge
+                                        Surface(
                                             modifier = Modifier
-                                                .offset(x = left, y = top)
-                                                .size(width = width, height = height)
+                                                .align(if (isNearTop) Alignment.BottomStart else Alignment.TopStart)
+                                                .padding(3.dp),
+                                            color = activeColor,
+                                            shape = RoundedCornerShape(4.dp),
+                                            shadowElevation = 4.dp
                                         ) {
-                                            Canvas(modifier = Modifier.fillMaxSize()) {
-                                                val strokeW = 2.5.dp.toPx()
-                                                val bracketLen = (size.minDimension * 0.28f).coerceIn(12.dp.toPx(), 28.dp.toPx())
-
-                                                drawRect(
-                                                    color = activeColor.copy(alpha = 0.15f),
-                                                    size = size
-                                                )
-
-                                                // 4 Corner brackets
-                                                drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(bracketLen, 0f), strokeWidth = strokeW)
-                                                drawLine(color = activeColor, start = Offset(0f, 0f), end = Offset(0f, bracketLen), strokeWidth = strokeW)
-                                                drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width - bracketLen, 0f), strokeWidth = strokeW)
-                                                drawLine(color = activeColor, start = Offset(size.width, 0f), end = Offset(size.width, bracketLen), strokeWidth = strokeW)
-                                                drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(bracketLen, size.height), strokeWidth = strokeW)
-                                                drawLine(color = activeColor, start = Offset(0f, size.height), end = Offset(0f, size.height - bracketLen), strokeWidth = strokeW)
-                                                drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width - bracketLen, size.height), strokeWidth = strokeW)
-                                                drawLine(color = activeColor, start = Offset(size.width, size.height), end = Offset(size.width, size.height - bracketLen), strokeWidth = strokeW)
-                                            }
-
-                                            // Label Badge
-                                            Surface(
-                                                modifier = Modifier
-                                                    .align(if (isNearTop) Alignment.BottomStart else Alignment.TopStart)
-                                                    .padding(4.dp),
-                                                color = activeColor,
-                                                shape = RoundedCornerShape(4.dp),
-                                                shadowElevation = 4.dp
-                                            ) {
-                                                Text(
-                                                    text = "${obj.classLabel} (${String.format(Locale.US, "%.0f%%", obj.confidence * 100)})",
-                                                    style = MaterialTheme.typography.labelSmall.copy(
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Bold
-                                                    ),
-                                                    color = Color.White,
-                                                    maxLines = 1,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                )
-                                            }
+                                            Text(
+                                                text = "${obj.classLabel} (${String.format(Locale.US, "%.0f%%", obj.confidence * 100)})",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                ),
+                                                color = Color.White,
+                                                maxLines = 1,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
                                         }
                                     }
                                 }
