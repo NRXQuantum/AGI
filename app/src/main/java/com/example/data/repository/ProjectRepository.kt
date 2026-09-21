@@ -6,7 +6,6 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import com.example.data.db.*
 import com.example.ml.*
-import com.example.util.ImageUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -285,11 +284,12 @@ class ProjectRepository(
     }
 
     suspend fun addImageSampleFromUri(classId: Long, projectId: Long, uri: Uri): Long = withContext(Dispatchers.IO) {
-        val bitmap = ImageUtils.decodeOrientedBitmap(context, uri)
+        val inputStream = context.contentResolver.openInputStream(uri)
+        val bitmap = BitmapFactory.decodeStream(inputStream)
+        inputStream?.close()
+        
         if (bitmap != null) {
-            val id = addImageSample(classId, projectId, bitmap)
-            bitmap.recycle()
-            id
+            addImageSample(classId, projectId, bitmap)
         } else {
             -1L
         }
@@ -401,7 +401,7 @@ class ProjectRepository(
                 for (sample in samplesForClass) {
                     val file = File(sample.imagePath)
                     if (file.exists()) {
-                        val bmp = ImageUtils.decodeOrientedBitmap(file, maxDim = 1280)
+                        val bmp = BitmapFactory.decodeFile(file.absolutePath)
                         if (bmp != null) {
                             val faces = faceEngine.detectFaces(bmp, maxFaces = 1)
                             val emb = if (faces.isNotEmpty()) {

@@ -42,8 +42,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.ml.BiometricAuditErrorCause
 import com.example.ml.EnrolledPerson
 import com.example.ml.FaceRecognitionEngine
+import com.example.ml.ModelTrainingResult
+import com.example.ml.SampleAuditReport
+import com.example.ml.TrainingCycleProgress
 import com.example.ui.components.CameraTestMode
 import com.example.ui.components.FaceEnrollmentDialog
 import com.example.ui.components.LiveCameraViewfinder
@@ -87,6 +91,10 @@ fun FaceRecognitionStudio(
     var isBuildingModel by remember { mutableStateOf(false) }
     var createdProjectId by remember { mutableStateOf<Long?>(null) }
     var buildStatusMessage by remember { mutableStateOf<String?>(null) }
+    var selectedTrainingCycles by remember { mutableIntStateOf(3) }
+    var currentCycleProgress by remember { mutableStateOf<TrainingCycleProgress?>(null) }
+    var trainingAuditResult by remember { mutableStateOf<ModelTrainingResult?>(null) }
+    var showAuditDetailsDialog by remember { mutableStateOf(false) }
 
     // Live Camera State
     var showLiveCamera by remember { mutableStateOf(false) }
@@ -498,20 +506,73 @@ fun FaceRecognitionStudio(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // 4. Primary Actions (Build Model & Test Live Camera)
+            // 4. Multi-Cycle Self-Audit & Training Configuration
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(16.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "Model Generation & Live Testing",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Self-Review & Training Cycles",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "পুনরায় ডাটা পর্যালোচনা ও স্বয়ংক্রিয় ভুল সংশোধন লুপ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
-                    // Button 1: Build & Calibrate Model
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                        ) {
+                            Text(
+                                text = "$selectedTrainingCycles Passes",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    // Segmented cycle selector chips
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf(
+                            1 to "1 Pass (Fast)",
+                            3 to "3 Passes (Optimal)",
+                            5 to "5 Passes (Deep)",
+                            10 to "10 Passes (Max)"
+                        ).forEach { (cycles, label) ->
+                            val isSelected = selectedTrainingCycles == cycles
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { selectedTrainingCycles = cycles },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                    // Button 1: Train with Self-Audit & Error Correction
                     Button(
                         onClick = {
                             val validPersons = enrolledList.filter { it.photos.isNotEmpty() }
@@ -522,15 +583,24 @@ fun FaceRecognitionStudio(
 
                             isBuildingModel = true
                             buildStatusMessage = null
+                            currentCycleProgress = null
                             coroutineScope.launch {
                                 try {
                                     val pairs = validPersons.map { it.name to it.photos.toList() }
-                                    val newId = faceEngine.buildAndSaveFaceRecognitionProject("Family & Persons", pairs)
-                                    createdProjectId = newId
-                                    buildStatusMessage = "✅ Successfully calibrated and saved Face Recognition Model with ${validPersons.size} persons!"
+                                    val result = faceEngine.trainAndAuditFaceRecognitionModel(
+                                        projectName = "Family & Persons",
+                                        persons = pairs,
+                                        trainingCycles = selectedTrainingCycles,
+                                        onCycleProgress = { progress ->
+                                            currentCycleProgress = progress
+                                        }
+                                    )
+                                    createdProjectId = result.projectId
+                                    trainingAuditResult = result
+                                    buildStatusMessage = result.statusSummaryBn
                                     refreshEnrolledBiometrics()
-                                    viewModel.selectProject(newId)
-                                    Toast.makeText(context, "Face Recognition Model Built!", Toast.LENGTH_SHORT).show()
+                                    viewModel.selectProject(result.projectId)
+                                    Toast.makeText(context, "মডেল সফলভাবে ট্রেইন ও অডিট সম্পন্ন হয়েছে!", Toast.LENGTH_SHORT).show()
                                 } catch (e: Exception) {
                                     buildStatusMessage = "❌ Error: ${e.localizedMessage}"
                                 } finally {
@@ -548,11 +618,12 @@ fun FaceRecognitionStudio(
                         if (isBuildingModel) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text("Calibrating Face Embeddings...")
+                            val cycleText = currentCycleProgress?.let { "Pass ${it.cycleIndex}/${it.totalCycles}: Auditing & Self-Correcting..." } ?: "Calibrating Multi-Pass Biometrics..."
+                            Text(cycleText, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
                         } else {
-                            Icon(imageVector = Icons.Default.Memory, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Icon(imageVector = Icons.Default.AutoGraph, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text("Build Face Recognition Model", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                            Text("Train Model with Multi-Pass Self-Audit", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
                         }
                     }
 
@@ -592,25 +663,297 @@ fun FaceRecognitionStudio(
                             Text("Use in Batch Folder Auto-Sorter", style = MaterialTheme.typography.labelLarge)
                         }
                     }
+                }
+            }
 
-                    buildStatusMessage?.let { msg ->
-                        Surface(
-                            color = if (msg.startsWith("✅")) Color(0xFF10B981).copy(alpha = 0.15f) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
-                            shape = RoundedCornerShape(8.dp),
+            // 5. Rich Self-Audit & Error Diagnostic Dashboard Card (if trained)
+            trainingAuditResult?.let { audit ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.5.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.Verified,
+                                    contentDescription = null,
+                                    tint = Color(0xFF10B981),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Self-Audit & Diagnostic Report",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Text(
+                                        text = "স্বয়ংক্রিয় ভুল শনাক্তকরণ ও সংশোধন ফলাফল",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF10B981).copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "${(audit.finalAccuracy * 100).toInt()}% Accuracy",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFF10B981),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        // Cycle progression visualization
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             Text(
-                                text = msg,
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                                color = if (msg.startsWith("✅")) Color(0xFF10B981) else MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(10.dp)
+                                text = "Cycle-by-Cycle Error Reduction Progress:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(audit.cycleHistory) { cycle ->
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (cycle.cycleIndex == audit.cyclesCompleted) Color(0xFF10B981) else MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.padding(vertical = 2.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = "Pass ${cycle.cycleIndex}:",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = if (cycle.cycleIndex == audit.cyclesCompleted) Color.White else MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                            Text(
+                                                text = "${(cycle.accuracy * 100).toInt()}%",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (cycle.cycleIndex == audit.cyclesCompleted) Color.White else MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4 Diagnostic Metric Cards
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            // Card A: Face Detection Health
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Icon(imageVector = Icons.Default.Face, contentDescription = null, tint = Color(0xFF0284C7), modifier = Modifier.size(14.dp))
+                                        Text("Face Health", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color(0xFF0284C7))
+                                    }
+                                    val totalFaces = audit.personStats.sumOf { it.facesDetected }
+                                    Text("$totalFaces Faces Verified", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium))
+                                    Text("ত্বকের বায়োমেট্রিক্স সক্রিয়", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+
+                            // Card B: Upper Torso / Body Contours
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Icon(imageVector = Icons.Default.AccessibilityNew, contentDescription = null, tint = Color(0xFF6366F1), modifier = Modifier.size(14.dp))
+                                        Text("Body Anchors", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color(0xFF6366F1))
+                                    }
+                                    val totalBodies = audit.personStats.sumOf { it.bodiesDetected }
+                                    Text("$totalBodies Body Anchors", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium))
+                                    Text("কোণ পরিবর্তনে সহায়ক", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            // Card C: Flower & Non-Human Shield
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Icon(imageVector = Icons.Default.Shield, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(14.dp))
+                                        Text("Anti-Flower Shield", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color(0xFF10B981))
+                                    }
+                                    Text("Active Protection", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium))
+                                    Text("ফুল ও বস্তু ফিল্টার সক্রিয়", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+
+                            // Card D: Self-Correction Repulsion
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Icon(imageVector = Icons.Default.Tune, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(14.dp))
+                                        Text("Self-Correction", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color(0xFFF59E0B))
+                                    }
+                                    Text("Hard Mining Done", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium))
+                                    Text("ভুল সংশোধন সম্পন্ন", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+
+                        // Button to open detailed sample audit report dialog
+                        OutlinedButton(
+                            onClick = { showAuditDetailsDialog = true },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(imageVector = Icons.Default.Assessment, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("View Sample-by-Sample Audit Details (নমুনা অডিট বিবরণী)")
                         }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(30.dp))
+        }
+
+        // Detailed Audit Report Dialog
+        if (showAuditDetailsDialog && trainingAuditResult != null) {
+            val audit = trainingAuditResult!!
+            val lastCycle = audit.cycleHistory.lastOrNull()
+
+            AlertDialog(
+                onDismissRequest = { showAuditDetailsDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(imageVector = Icons.Default.Analytics, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Detailed Sample Audit (নমুনা অডিট বিশ্লেষণ)")
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = audit.statusSummaryBn,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        HorizontalDivider()
+
+                        audit.personStats.forEach { pStat ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(text = pStat.personName, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                                    Text(
+                                        text = "${pStat.facesDetected}/${pStat.sampleCount} Faces • ${(pStat.accuracy * 100).toInt()}% Match",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF10B981)
+                                    )
+                                }
+
+                                pStat.recommendationsBn.forEach { rec ->
+                                    Text(text = "• $rec", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+
+                        if (lastCycle != null) {
+                            Text(
+                                text = "Sample Verification Breakdown (${lastCycle.sampleReports.size} Samples):",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+
+                            lastCycle.sampleReports.forEach { report ->
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (report.isCorrect) Color(0xFF10B981).copy(alpha = 0.10f) else Color(0xFFF59E0B).copy(alpha = 0.12f),
+                                    border = BorderStroke(1.dp, if (report.isCorrect) Color(0xFF10B981).copy(alpha = 0.3f) else Color(0xFFF59E0B).copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                text = "${report.personName} (Photo #${report.sampleIndex + 1})",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                            Text(
+                                                text = if (report.isCorrect) "✅ Verified (${(report.predictedConfidence * 100).toInt()}%)" else "⚠️ Self-Corrected",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = if (report.isCorrect) Color(0xFF10B981) else Color(0xFFF59E0B)
+                                            )
+                                        }
+                                        Text(
+                                            text = report.diagnosticMessageBn,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { showAuditDetailsDialog = false }) {
+                        Text("Close (বন্ধ করুন)")
+                    }
+                }
+            )
         }
 
         // Add Person Dialog
