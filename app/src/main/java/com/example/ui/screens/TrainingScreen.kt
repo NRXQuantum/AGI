@@ -75,7 +75,6 @@ fun TrainingScreen(
     var selectedArchitecture by remember { mutableStateOf(ModelArchitecture.DEEP_RESIDUAL_MLP) }
     var selectedOptimizer by remember { mutableStateOf(OptimizerType.ADAM_W) }
     var selectedLrSchedule by remember { mutableStateOf(LearningRateSchedule.COSINE_ANNEALING) }
-    var selectedBiometricPasses by remember { mutableIntStateOf(3) }
     var showAuditDetailsDialog by remember { mutableStateOf(false) }
 
     // Load or retrieve training parameters for this project
@@ -653,104 +652,6 @@ fun TrainingScreen(
                             Spacer(modifier = Modifier.height(10.dp))
                         }
 
-                        // BIOMETRIC SELF-REVIEW TRAINING PASSES SELECTOR
-                        if (isFaceMode) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(10.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.AutoGraph,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                "Self-Review Cycles (সেলফ-রিভিউ পাস)",
-                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                        Surface(
-                                            color = MaterialTheme.colorScheme.primary,
-                                            shape = RoundedCornerShape(6.dp)
-                                        ) {
-                                            Text(
-                                                "$selectedBiometricPasses Passes",
-                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                color = MaterialTheme.colorScheme.onPrimary,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        "প্রতিটি পাসে মডেল ফটোগুলো পুনরায় অডিট করে এবং ভুল শনাক্ত হলে সেন্ট্রয়েড ও মার্জিন স্বয়ংক্রিয়ভাবে সংশোধন করে।",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        listOf(
-                                            1 to "1 Pass (Fast)",
-                                            3 to "3 Passes (Optimal)",
-                                            5 to "5 Passes (Deep)",
-                                            10 to "10 Passes (Max)"
-                                        ).forEach { (passCount, title) ->
-                                            val isSelected = selectedBiometricPasses == passCount
-                                            Surface(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .clickable(enabled = !isTraining) {
-                                                        selectedBiometricPasses = passCount
-                                                        epochs = passCount.toFloat()
-                                                    },
-                                                shape = RoundedCornerShape(8.dp),
-                                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                                                border = BorderStroke(
-                                                    if (isSelected) 1.5.dp else 1.dp,
-                                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                                )
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    Text(
-                                                        text = title,
-                                                        style = MaterialTheme.typography.labelSmall.copy(
-                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                            fontSize = 10.sp
-                                                        ),
-                                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                                        maxLines = 1
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-                        }
-
                         // START TRAINING BUTTON
                         Button(
                             onClick = {
@@ -765,7 +666,7 @@ fun TrainingScreen(
                                 }
                                 logs.clear()
                                 isLogsExpanded = true
-                                val finalEpochs = if (isFaceMode) selectedBiometricPasses else epochs.toInt()
+                                val finalEpochs = if (isFaceMode) 3 else epochs.toInt()
                                 viewModel.startOnDeviceTraining(
                                     epochs = finalEpochs,
                                     learningRate = learningRate,
@@ -789,9 +690,9 @@ fun TrainingScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (latestModel != null) {
-                                    if (isFaceMode) "Re-Calibrate Person Biometrics ($selectedBiometricPasses Passes)" else "Re-Train Model On-Device"
+                                    if (isFaceMode) "Re-Calibrate Person Biometrics" else "Re-Train Model On-Device"
                                 } else {
-                                    if (isFaceMode) "Calibrate Person & Face Embeddings ($selectedBiometricPasses Passes)" else "Start On-Device Training"
+                                    if (isFaceMode) "Calibrate Person & Face Embeddings" else "Start On-Device Training"
                                 },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
