@@ -104,13 +104,17 @@ object AppLogger {
             throwableStackTrace = stackTrace
         )
 
-        // Native Android Logcat logging
-        when (level) {
-            LogLevel.DEBUG -> Log.d(tag, message, throwable)
-            LogLevel.INFO -> Log.i(tag, message, throwable)
-            LogLevel.WARN -> Log.w(tag, message, throwable)
-            LogLevel.ERROR -> Log.e(tag, message, throwable)
-            LogLevel.CRITICAL -> Log.e(tag, "FATAL: $message", throwable)
+        // Native Android Logcat logging (safely caught in local JVM unit tests)
+        try {
+            when (level) {
+                LogLevel.DEBUG -> Log.d(tag, message, throwable)
+                LogLevel.INFO -> Log.i(tag, message, throwable)
+                LogLevel.WARN -> Log.w(tag, message, throwable)
+                LogLevel.ERROR -> Log.e(tag, message, throwable)
+                LogLevel.CRITICAL -> Log.e(tag, "FATAL: $message", throwable)
+            }
+        } catch (_: Throwable) {
+            println("[$tag] [${level.name}] $message")
         }
 
         // State update

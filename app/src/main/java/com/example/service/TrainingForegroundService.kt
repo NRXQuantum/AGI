@@ -36,6 +36,7 @@ class TrainingForegroundService : Service() {
 
     private var currentProjectName: String = "Model"
     private var lastNotificationUpdateTime = 0L
+    private var lastNotifiedEpoch = -1
 
     override fun onCreate() {
         super.onCreate()
@@ -157,9 +158,7 @@ class TrainingForegroundService : Service() {
                     onProgress = { progress ->
                         TrainingManager.updateProgress(progress)
                         updateNotificationThrottled(progress)
-                        if (progress.currentEpoch % 5 == 0 || progress.phase == TrainingPhase.COMPLETED) {
-                            AppLogger.d("TrainingService", "Progress: ${progress.phase.title} | Epoch ${progress.currentEpoch}/$epochs | Loss: ${progress.loss} | Acc: ${progress.accuracy * 100}%")
-                        }
+                        AppLogger.d("TrainingService", "Progress: ${progress.phase.title} | Epoch ${progress.currentEpoch}/$epochs | Loss: ${String.format(Locale.US, "%.4f", progress.loss)} | Acc: ${String.format(Locale.US, "%.1f%%", progress.accuracy * 100f)} | Status: ${progress.statusMessage}")
                     }
                 )
                 AppLogger.i("TrainingService", "Training job for Project #$projectId completed successfully!")
@@ -194,10 +193,14 @@ class TrainingForegroundService : Service() {
 
     private fun updateNotificationThrottled(progress: TrainingProgress) {
         val now = System.currentTimeMillis()
-        // Update at most twice a second, or immediately on phase completion/error
         val isFinal = progress.phase == TrainingPhase.COMPLETED || progress.phase == TrainingPhase.ERROR || progress.phase == TrainingPhase.CANCELLED
-        if (isFinal || now - lastNotificationUpdateTime >= 500L) {
+        val isEpochChange = progress.currentEpoch > 0 && progress.currentEpoch != lastNotifiedEpoch
+
+        if (isFinal || isEpochChange || now - lastNotificationUpdateTime >= 500L) {
             lastNotificationUpdateTime = now
+            if (progress.currentEpoch > 0) {
+                lastNotifiedEpoch = progress.currentEpoch
+            }
 
             if (progress.phase == TrainingPhase.COMPLETED) {
                 showFinalNotification(

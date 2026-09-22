@@ -1,5 +1,6 @@
 package com.example.ml
 
+import com.example.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -367,6 +368,7 @@ class OnDeviceTrainer(
     ) = withContext(Dispatchers.Default) {
         if (samples.isEmpty() || numClasses < 2) return@withContext
         this@OnDeviceTrainer.architecture = architecture
+        AppLogger.i("OnDeviceTrainer", "Initiating training session: epochs=$epochs, architecture=${architecture.displayName}, lr=$learningRate, batchSize=$batchSize, samples=${samples.size}, classes=$numClasses")
 
         val elapsedMsStart = System.currentTimeMillis() - overallStartMs
         val elapsedSecStart = elapsedMsStart / 1000L
@@ -517,11 +519,28 @@ class OnDeviceTrainer(
                 sampleIndices[j] = temp
             }
 
+            AppLogger.d("OnDeviceTrainer", "--> [Epoch $epoch/$epochs] Starting training epoch (LR: ${String.format(Locale.US, "%.6f", currentLr)})")
+
             var totalLoss = 0f
             var correctPredictions = 0
 
             val effectiveBatchSize = batchSize.coerceIn(1, numSamples.coerceAtLeast(1))
             var batchIndex = 0
+
+            // Explicitly zero-out intermediate activation and scratch buffers between iterations
+            java.util.Arrays.fill(u1, 0f)
+            java.util.Arrays.fill(u1Hat, 0f)
+            java.util.Arrays.fill(a1, 0f)
+            java.util.Arrays.fill(dHat1, 0f)
+            java.util.Arrays.fill(u2, 0f)
+            java.util.Arrays.fill(u2Hat, 0f)
+            java.util.Arrays.fill(a2, 0f)
+            java.util.Arrays.fill(dHat2, 0f)
+            java.util.Arrays.fill(logits, 0f)
+            java.util.Arrays.fill(probs, 0f)
+            java.util.Arrays.fill(dLogits, 0f)
+            java.util.Arrays.fill(da1, 0f)
+            java.util.Arrays.fill(da2, 0f)
 
             while (batchIndex < numSamples) {
                 val batchEnd = (batchIndex + effectiveBatchSize).coerceAtMost(numSamples)
@@ -1068,8 +1087,14 @@ class OnDeviceTrainer(
                 yield()
             }
 
-            if (deviceProtectionEnabled) {
-                delay(6)
+            val epochFinalLoss = if (numSamples > 0) totalLoss / numSamples else 0f
+            val epochFinalAcc = if (numSamples > 0) correctPredictions.toFloat() / numSamples else 0f
+            AppLogger.i("OnDeviceTrainer", "[Epoch $epoch/$epochs] Completed: Loss=${String.format(Locale.US, "%.4f", epochFinalLoss)}, Acc=${String.format(Locale.US, "%.1f%%", epochFinalAcc * 100f)}, Correct=$correctPredictions/$numSamples")
+
+            if (numSamples < 200) {
+                delay(300)
+            } else if (deviceProtectionEnabled) {
+                delay(12)
             } else {
                 yield()
             }

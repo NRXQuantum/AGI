@@ -131,6 +131,7 @@ fun TrainingScreen(
     var lastLoggedPhase by remember { mutableStateOf<TrainingPhase?>(null) }
     var lastLoggedEpoch by remember { mutableIntStateOf(-1) }
     var lastLoggedMilestonePct by remember { mutableIntStateOf(-1) }
+    var lastLoggedMessage by remember { mutableStateOf("") }
 
     LaunchedEffect(isTraining) {
         if (isTraining) {
@@ -138,6 +139,7 @@ fun TrainingScreen(
             lastLoggedPhase = null
             lastLoggedEpoch = -1
             lastLoggedMilestonePct = -1
+            lastLoggedMessage = ""
         }
     }
 
@@ -158,7 +160,7 @@ fun TrainingScreen(
                 TrainingPhase.STANDARDIZING_FEATURES -> "Standardizing extracted neural features with Z-score & L2..."
                 TrainingPhase.TRAINING_NEURAL_NET -> {
                     lastLoggedEpoch = epoch
-                    if (isFaceMode) msg.ifBlank { "ধাপ ২: মাল্টি-পাস বায়োমেট্রিক সেলফ-রিভিউ প্রশিক্ষণ শুরু..." } else "Started neural network backpropagation training..."
+                    if (msg.isNotBlank()) msg else if (isFaceMode) "ধাপ ২: মাল্টি-পাস বায়োমেট্রিক সেলফ-রিভিউ প্রশিক্ষণ শুরু..." else "Started neural network backpropagation training..."
                 }
                 TrainingPhase.FINALIZING_MODEL -> if (isFaceMode) "ধাপ ৩: বায়োমেট্রিক সেন্ট্রয়েড ও মডেল সেভ করা হচ্ছে..." else "Saving model weights and scaler to storage..."
                 TrainingPhase.COMPLETED -> msg.ifBlank { if (isFaceMode) "বায়োমেট্রিক মডেল সফলভাবে প্রস্তুত হয়েছে!" else "Training completed successfully!" }
@@ -166,10 +168,15 @@ fun TrainingScreen(
                 TrainingPhase.ERROR -> msg.ifBlank { "Training error occurred." }
                 else -> ""
             }
-        } else if (phase == TrainingPhase.TRAINING_NEURAL_NET && epoch != lastLoggedEpoch && epoch > 0) {
-            lastLoggedEpoch = epoch
-            shouldLog = true
-            logText = msg
+        } else if (phase == TrainingPhase.TRAINING_NEURAL_NET) {
+            if (epoch != lastLoggedEpoch && epoch > 0) {
+                lastLoggedEpoch = epoch
+                shouldLog = true
+                logText = msg
+            } else if (msg.isNotBlank() && msg != lastLoggedMessage && (msg.contains("সম্পন্ন") || msg.contains("Completed") || msg.contains("100%"))) {
+                shouldLog = true
+                logText = msg
+            }
         } else if (phase == TrainingPhase.EXTRACTING_FEATURES && current.totalSteps > 0) {
             // Milestone logging every ~25% step (e.g. 25%, 50%, 75%, 100%)
             val pct25 = ((current.currentStep.toDouble() / current.totalSteps) * 4).toInt() * 25
@@ -185,7 +192,8 @@ fun TrainingScreen(
             }
         }
 
-        if (shouldLog && logText.isNotBlank()) {
+        if (shouldLog && logText.isNotBlank() && (logs.isEmpty() || logs.last() != logText)) {
+            lastLoggedMessage = logText
             if (logs.size >= 100) {
                 logs.removeAt(0)
             }

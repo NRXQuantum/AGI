@@ -10,7 +10,9 @@ import com.example.data.db.ClassificationClassEntity
 import com.example.data.db.ImageSampleEntity
 import com.example.data.db.ProjectEntity
 import com.example.data.db.TrainedModelEntity
+import com.example.util.AppLogger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1493,6 +1495,7 @@ class FaceRecognitionEngine(private val context: Context) {
 
         // 4. Multi-Cycle Iterative Self-Audit & Error Self-Correction Loop
         val totalCyclesToRun = trainingCycles.coerceIn(1, 10)
+        AppLogger.i("FaceRecognitionEngine", "Initiating biometric training: requestedCycles=$trainingCycles, effectiveCycles=$totalCyclesToRun, classes=$numClasses, totalSamples=${allRawSamples.size}")
         val cycleHistory = mutableListOf<TrainingCycleProgress>()
         var initialAccuracy = 1.0f
         var finalAccuracy = 1.0f
@@ -1503,6 +1506,8 @@ class FaceRecognitionEngine(private val context: Context) {
         }
 
         for (cycle in 1..totalCyclesToRun) {
+            AppLogger.d("FaceRecognitionEngine", "--> Starting Iterative Audit Cycle $cycle/$totalCyclesToRun...")
+            // Explicitly reset per-iteration evaluation state variables
             var correctCount = 0
             val totalCount = allRawSamples.size
             val cycleReports = mutableListOf<SampleAuditReport>()
@@ -1658,7 +1663,10 @@ class FaceRecognitionEngine(private val context: Context) {
                 }
             }
 
+            AppLogger.i("FaceRecognitionEngine", "Completed Cycle $cycle/$totalCyclesToRun: Accuracy=${String.format(Locale.US, "%.1f%%", cycleAccuracy * 100f)} ($correctCount/$totalCount correct)")
             onCycleProgress?.invoke(progress)
+            // Allow UI to visibly render and transition between cycles
+            delay(650)
         }
 
         // 6. Calculate Per-Person Quality & Recommendations

@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import com.example.data.db.*
 import com.example.ml.*
+import com.example.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -480,8 +481,10 @@ class ProjectRepository(
                 var finalAccuracy = 1.0f
                 var finalLoss = 0.05f
                 val cycleHistoryJson = org.json.JSONArray()
+                AppLogger.i("ProjectRepository", "Initiating biometric training loop: totalCycles=$totalCycles, samples=${allSampleEmbeddingsWithClass.size}, classes=$numClasses")
 
                 for (cycle in 1..totalCycles) {
+                    AppLogger.d("ProjectRepository", "--> Starting Biometric Self-Audit Pass $cycle/$totalCycles")
                     val cycleStartPct = (35f + ((cycle - 1).toFloat() / totalCycles.toFloat()) * 60f).coerceIn(35f, 95f)
                     val elapsedMsStart = (System.currentTimeMillis() - overallStartMs).coerceAtLeast(100L)
                     val elapsedSecStart = elapsedMsStart / 1000L
@@ -506,6 +509,7 @@ class ProjectRepository(
                     // Pacing delay to ensure real-time UI animation and visible transition
                     kotlinx.coroutines.delay(400)
 
+                    // Explicitly reset per-cycle evaluation metrics, class error counts, and gradient accumulators
                     var correctMatches = 0
                     var totalLoss = 0.0
                     val classMistakes = IntArray(numClasses)
@@ -603,6 +607,8 @@ class ProjectRepository(
                     } else {
                         " • ১০০% নিখুঁত"
                     }
+
+                    AppLogger.i("ProjectRepository", "Completed Biometric Pass $cycle/$totalCycles: Acc=${String.format(Locale.US, "%.1f%%", cycleAccuracy * 100f)}, Correct=$correctMatches/$totalEvaluated, Loss=${String.format(Locale.US, "%.4f", cycleLoss)}")
 
                     onProgress(
                         TrainingProgress(
