@@ -1423,6 +1423,34 @@ fun InferenceScreen(
                                 Text("Clear", style = MaterialTheme.typography.labelMedium)
                             }
                         }
+
+                        if (isFaceMode) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF8B5CF6).copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.35f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Shield,
+                                        contentDescription = null,
+                                        tint = Color(0xFF8B5CF6),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Anti-Floral Shield Active: ফুল, পাতা বা কৃত্রিম বস্তু স্বয়ংক্রিয়ভাবে ফিল্টার করে বাদ দেওয়া হবে।",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
+                                        color = Color(0xFF6D28D9)
+                                    )
+                                }
+                            }
+                        }
                     } else {
                         // Empty State Upload Card
                         Surface(
