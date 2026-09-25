@@ -2,19 +2,38 @@ package com.example.ml
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStream
+import java.io.InputStreamReader
 import java.util.Locale
 
 /**
- * Universal Parser for text classification datasets.
+ * Universal, Memory-Safe Multi-Format Parser for Text NLP & Large Datasets (500MB+ Safe).
  *
  * Supports:
- * 1. Dialogue / Speaker Colon Format (e.g. Shakespeare "First Citizen:\n...\n\nAll:\n...")
- * 2. Inline Colon / Hyphen Format (e.g. "Spam: Buy cheap pills now")
- * 3. CSV / TSV Format (e.g. "label,text" or "text,label")
- * 4. JSON / JSONL Format (e.g. [{"label": "...", "text": "..."}] or one json per line)
- * 5. Section Header Format (e.g. "[Positive]\nSample 1\nSample 2")
+ * 1. QA / Flashcard / Knowledge Base Formats:
+ *    - "question,answer" (e.g. "বাংলাদেশের দীর্ঘতম নদী কোনটি?,মেঘনা")
+ *    - "q,a", "query,target", "prompt,response", "input,output"
+ * 2. Instruction & LLM Tuning Formats (JSON / JSONL):
+ *    - Dolly/Databricks: {"instruction": "...", "context": "...", "response": "...", "category": "..."}
+ *    - Alpaca: {"instruction": "...", "input": "...", "output": "..."}
+ *    - OpenAI / ChatML: {"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
+ * 3. Dialogue / Transcript / Drama Script:
+ *    - "First Citizen:\n...\n\nMENENIUS:\n..."
+ * 4. Standard Tabular CSV / TSV / Semicolon (Any custom headers & column layouts).
+ * 5. Markdown / Section Headers ([Category] / # Category).
+ * 6. Memory-Safe Streaming: Line-by-line buffered stream with zero OOM risk for huge files.
  */
 object TextDatasetParser {
+
+    enum class DatasetFormatStrategy(val title: String, val titleBn: String, val description: String) {
+        AUTO_DETECT("Auto-Detect Format", "স্বয়ংক্রিয় সনাক্তকরণ", "Automatically identify CSV, JSONL, QA, or Dialogue formats"),
+        QA_QUESTION_ANSWER("Question & Answer (QA)", "প্রশ্ন ও উত্তর (QA)", "Pairs of question and answer (e.g. question,answer CSV)"),
+        INSTRUCTION_RESPONSE("Instruction & Response", "ইনস্ট্রাকশন ও রেসপন্স", "LLM Instruction datasets (Dolly, Alpaca, JSONL)"),
+        SHAKESPEARE_DIALOGUE("Dialogue & Drama Script", "নাটক ও সংলাপ স্ক্রিপ্ট", "Character dialogues (Speaker: Dialogue transcript)"),
+        CSV_LABEL_TEXT("CSV / TSV (Label & Text)", "ক্যাটাগরি ও টেক্সট CSV", "Standard tabular rows with class label and text"),
+        SECTION_HEADER("Section Headers ([Category])", "সেকশন হেডার", "Categories marked with [Category] or # Category")
+    }
 
     data class ParsedSample(
         val className: String,
@@ -25,6 +44,8 @@ object TextDatasetParser {
         val formatName: String,
         val samples: List<ParsedSample>,
         val classCounts: Map<String, Int>,
+        val totalLinesScanned: Long = 0L,
+        val isCapped: Boolean = false,
         val errorMessage: String? = null
     ) {
         fun filterByMinSamples(minSamples: Int): ParseResult {
@@ -158,6 +179,24 @@ Have the patricians of you. For your wants,
 Your suffering in this dearth, you may as well
 Strike at the heaven with your staves as lift them"""
 
+    const val BANGLADESH_GK_QA_SAMPLE: String = """question,answer
+বাংলাদেশের দীর্ঘতম নদী কোনটি?,মেঘনা
+বাংলাদেশে স্থানীয় সরকার ব্যবস্থা দুর্বল হওয়ার পেছনে সবচেয়ে বড় প্রাতিষ্ঠানিক দ্বন্দ্ব কোনটি?,উপজেলা ও ইউনিয়ন পরিষদের মধ্যে দ্বৈত প্রশাসনিক কর্তৃত্ব
+কোন সংস্থা বাংলাদেশের GDP হিসাব করে?,বাংলাদেশ পরিসংখ্যান ব্যুরো
+পদ্মা ও যমুনা নদীর শাখা কোনগুলো?,গড়াই ও ধলেশ্বরী
+বাংলাদেশের সংবিধানে মৌলিক অধিকার সংক্রান্ত অনুচ্ছেদ কতটি?,১৮টি অনুচ্ছেদ
+বাংলাদেশের জাতীয় সংসদের প্রথম স্পিকার কে ছিলেন?,মোহাম্মদ উল্লাহ
+মুজিবনগর সরকার শপথ গ্রহণ করে কত তারিখে?,১৭ এপ্রিল ১৯৭১
+বাংলাদেশের সবচেয়ে বড় স্থলবন্দর কোনটি?,বেনাপোল স্থলবন্দর
+সুন্দরবনকে বিশ্ব ঐতিহ্য হিসেবে ঘোষণা করে কোন সংস্থা?,ইউনেস্কো (UNESCO)
+বাংলাদেশের প্রথম ডিজিটাল জেলা কোনটি?,যশোর"""
+
+    const val INSTRUCTION_JSONL_SAMPLE: String = """{"instruction": "When did Virgin Australia start operating?", "context": "Virgin Australia commenced services on 31 August 2000 as Virgin Blue, with two aircraft on a single route.", "response": "Virgin Australia commenced services on 31 August 2000 as Virgin Blue.", "category": "closed_qa"}
+{"instruction": "Which is a species of fish? Tope or Rope", "context": "", "response": "Tope is a species of houndshark fish.", "category": "classification"}
+{"instruction": "Why can camels survive for long without water?", "context": "", "response": "Camels use the fat in their humps to store energy and minimize water loss.", "category": "open_qa"}
+{"instruction": "What is the capital city of France?", "context": "", "response": "The capital of France is Paris.", "category": "general_knowledge"}
+{"instruction": "Identify the intent: I want to cancel my monthly plan", "context": "", "response": "Cancellation Request", "category": "customer_support"}"""
+
     private val CLASS_PALETTE = listOf(
         "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
         "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
@@ -168,7 +207,27 @@ Strike at the heaven with your staves as lift them"""
         return CLASS_PALETTE[index % CLASS_PALETTE.size]
     }
 
-    fun parse(rawContent: String): ParseResult {
+    /**
+     * Memory-safe line-by-line streaming parser for huge files (up to 500MB+ without OOM).
+     */
+    fun parseStream(
+        inputStream: InputStream,
+        strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
+        maxSampleCap: Int = 30_000,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)? = null
+    ): ParseResult {
+        val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8), 32 * 1024)
+        return parseBufferedReader(reader, strategy, maxSampleCap, onProgress)
+    }
+
+    /**
+     * Standard string-based parser (wraps reader for unified parsing).
+     */
+    fun parse(
+        rawContent: String,
+        strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
+        maxSampleCap: Int = 30_000
+    ): ParseResult {
         val trimmed = rawContent.trim()
         if (trimmed.isBlank()) {
             return ParseResult(
@@ -178,70 +237,270 @@ Strike at the heaven with your staves as lift them"""
                 errorMessage = "Content is empty."
             )
         }
+        val reader = trimmed.reader().buffered()
+        return parseBufferedReader(reader, strategy, maxSampleCap, null)
+    }
 
-        // 1. Try JSON or JSONL format
-        if (trimmed.startsWith("[") || (trimmed.startsWith("{") && trimmed.contains("\""))) {
-            val jsonRes = tryParseJsonOrJsonl(trimmed)
-            if (jsonRes != null && jsonRes.samples.isNotEmpty()) {
-                return jsonRes
+    private fun parseBufferedReader(
+        reader: BufferedReader,
+        strategy: DatasetFormatStrategy,
+        maxSampleCap: Int,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)?
+    ): ParseResult {
+        // Read first 50 lines to inspect format
+        reader.mark(64 * 1024)
+        val previewLines = mutableListOf<String>()
+        var lineCount = 0
+        while (lineCount < 50) {
+            val line = reader.readLine() ?: break
+            if (line.isNotBlank()) {
+                previewLines.add(line)
+                lineCount++
+            }
+        }
+        reader.reset()
+
+        if (previewLines.isEmpty()) {
+            return ParseResult(
+                formatName = "Empty",
+                samples = emptyList(),
+                classCounts = emptyMap(),
+                errorMessage = "File is empty or contains no readable lines."
+            )
+        }
+
+        // Determine effective strategy
+        val effectiveStrategy = if (strategy == DatasetFormatStrategy.AUTO_DETECT) {
+            detectBestStrategy(previewLines)
+        } else {
+            strategy
+        }
+
+        return when (effectiveStrategy) {
+            DatasetFormatStrategy.INSTRUCTION_RESPONSE -> parseJsonlStream(reader, maxSampleCap, onProgress)
+            DatasetFormatStrategy.SHAKESPEARE_DIALOGUE -> parseDialogueStream(reader, maxSampleCap, onProgress)
+            DatasetFormatStrategy.QA_QUESTION_ANSWER -> parseQaCsvStream(reader, maxSampleCap, onProgress)
+            DatasetFormatStrategy.SECTION_HEADER -> parseSectionHeadersStream(reader, maxSampleCap, onProgress)
+            DatasetFormatStrategy.CSV_LABEL_TEXT, DatasetFormatStrategy.AUTO_DETECT -> parseGenericCsvStream(reader, maxSampleCap, onProgress)
+        }
+    }
+
+    private fun detectBestStrategy(previewLines: List<String>): DatasetFormatStrategy {
+        val firstLine = previewLines.first().trim()
+
+        // 1. JSON / JSONL
+        if (firstLine.startsWith("{") && (firstLine.contains("\"instruction\"") || firstLine.contains("\"category\"") || firstLine.contains("\"label\"") || firstLine.contains("\"text\""))) {
+            return DatasetFormatStrategy.INSTRUCTION_RESPONSE
+        }
+        if (firstLine.startsWith("[") && firstLine.contains("{")) {
+            return DatasetFormatStrategy.INSTRUCTION_RESPONSE
+        }
+
+        // 2. Question / Answer CSV
+        val lowerFirst = firstLine.lowercase(Locale.ROOT)
+        if (lowerFirst.contains("question") && lowerFirst.contains("answer")) {
+            return DatasetFormatStrategy.QA_QUESTION_ANSWER
+        }
+        if (lowerFirst.startsWith("q,a") || lowerFirst.startsWith("query,response") || lowerFirst.startsWith("prompt,response") || lowerFirst.startsWith("input,output")) {
+            return DatasetFormatStrategy.QA_QUESTION_ANSWER
+        }
+
+        // 3. Section Headers
+        if (firstLine.startsWith("[") && firstLine.endsWith("]") || firstLine.startsWith("# ") || firstLine.startsWith("## ")) {
+            return DatasetFormatStrategy.SECTION_HEADER
+        }
+
+        // 4. Shakespeare Dialogue (e.g. "First Citizen:\n...")
+        val colonCount = previewLines.count { line ->
+            val colonIdx = line.indexOf(':')
+            colonIdx in 1..40 && line.substring(0, colonIdx).split(" ").size <= 5
+        }
+        if (colonCount >= 2 && !firstLine.contains(",")) {
+            return DatasetFormatStrategy.SHAKESPEARE_DIALOGUE
+        }
+
+        // 5. Delimited CSV/TSV
+        if (firstLine.contains(",") || firstLine.contains("\t") || firstLine.contains(";")) {
+            return DatasetFormatStrategy.CSV_LABEL_TEXT
+        }
+
+        return DatasetFormatStrategy.SHAKESPEARE_DIALOGUE
+    }
+
+    /**
+     * Parse Question-Answer CSV / TSV format
+     */
+    private fun parseQaCsvStream(
+        reader: BufferedReader,
+        maxSampleCap: Int,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)?
+    ): ParseResult {
+        val samples = mutableListOf<ParsedSample>()
+        var lineNum = 0L
+        var delimiter = ','
+
+        val headerLine = reader.readLine() ?: return emptyResult("QA CSV")
+        lineNum++
+        if (headerLine.contains("\t")) delimiter = '\t' else if (headerLine.contains(";")) delimiter = ';'
+
+        val headerCols = splitCsvLine(headerLine, delimiter).map { it.lowercase(Locale.ROOT) }
+        var questionCol = headerCols.indexOfFirst { it in listOf("question", "q", "prompt", "query", "input", "instruction") }
+        var answerCol = headerCols.indexOfFirst { it in listOf("answer", "a", "response", "target", "output", "completion") }
+
+        if (questionCol == -1 || answerCol == -1) {
+            questionCol = 0
+            answerCol = 1
+        }
+
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            lineNum++
+            val l = line?.trim() ?: continue
+            if (l.isEmpty()) continue
+
+            val cols = splitCsvLine(l, delimiter)
+            if (cols.size > maxOf(questionCol, answerCol)) {
+                val question = cols[questionCol].trim()
+                val answer = cols[answerCol].trim()
+
+                if (question.isNotEmpty() && answer.isNotEmpty()) {
+                    val label = sanitizeClassName(answer.take(35))
+                    samples.add(ParsedSample(label, question))
+                    if (samples.size >= maxSampleCap) break
+                }
+            }
+
+            if (lineNum % 500 == 0L) {
+                onProgress?.invoke(lineNum, samples.size)
             }
         }
 
-        // 2. Try Dialogue / Transcript Colon Format (e.g. "First Citizen:\n...\n\nAll:\n...")
-        val dialogueRes = tryParseDialogueFormat(trimmed)
-        if (dialogueRes != null && dialogueRes.samples.isNotEmpty() && dialogueRes.classCounts.size >= 2) {
-            return dialogueRes
-        }
-
-        // 3. Try CSV / TSV
-        val csvRes = tryParseCsvOrTsv(trimmed)
-        if (csvRes != null && csvRes.samples.isNotEmpty() && csvRes.classCounts.size >= 2) {
-            return csvRes
-        }
-
-        // 4. Try Section Headers (e.g. "[Class Name]" or "### Class Name")
-        val sectionRes = tryParseSectionHeaders(trimmed)
-        if (sectionRes != null && sectionRes.samples.isNotEmpty() && sectionRes.classCounts.size >= 2) {
-            return sectionRes
-        }
-
-        // 5. Try Inline Colon Format (e.g. "Label: Text content here")
-        val inlineColonRes = tryParseInlineColon(trimmed)
-        if (inlineColonRes != null && inlineColonRes.samples.isNotEmpty() && inlineColonRes.classCounts.size >= 2) {
-            return inlineColonRes
-        }
-
-        // If dialogue parser found at least some samples
-        if (dialogueRes != null && dialogueRes.samples.isNotEmpty()) {
-            return dialogueRes
-        }
-
+        if (samples.isEmpty()) return emptyResult("Question-Answer CSV")
+        val counts = samples.groupingBy { it.className }.eachCount()
         return ParseResult(
-            formatName = "Unknown",
-            samples = emptyList(),
-            classCounts = emptyMap(),
-            errorMessage = "Could not automatically identify classes and samples. Supported formats: Speaker colon blocks (Label:\\nText), CSV/TSV, JSON, or Section Headers."
+            formatName = "📋 Question & Answer Dataset (QA Pairs)",
+            samples = samples,
+            classCounts = counts,
+            totalLinesScanned = lineNum,
+            isCapped = samples.size >= maxSampleCap
         )
     }
 
     /**
-     * Parses dialogue / transcript speaker format:
-     * Label:
-     * Text paragraph...
-     *
-     * Next Label:
-     * Text paragraph...
+     * Parse Instruction Tuning JSON / JSONL (Dolly, Alpaca, ChatML, Databricks)
      */
-    private fun tryParseDialogueFormat(text: String): ParseResult? {
-        val lines = text.lines()
-        val speakerRegex = "^(?:\\[([A-Za-z0-9_\u0980-\u09FF\\s\\-\\.\\(\\)'\"]{1,45})\\]|([A-Za-z0-9_\u0980-\u09FF\\s\\-\\.\\(\\)'\"]{1,45}))\\s*[:\\-]\\s*(.*)$".toRegex()
+    private fun parseJsonlStream(
+        reader: BufferedReader,
+        maxSampleCap: Int,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)?
+    ): ParseResult {
+        val samples = mutableListOf<ParsedSample>()
+        var lineNum = 0L
 
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            lineNum++
+            val l = line?.trim() ?: continue
+            if (l.isEmpty()) continue
+
+            // JSON Array support
+            if (l.startsWith("[") && l.endsWith("]")) {
+                try {
+                    val arr = JSONArray(l)
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        extractSampleFromJson(item)?.let {
+                            samples.add(it)
+                            if (samples.size >= maxSampleCap) break
+                        }
+                    }
+                } catch (_: Exception) {}
+                continue
+            }
+
+            if (l.startsWith("{") && l.endsWith("}")) {
+                try {
+                    val obj = JSONObject(l)
+                    extractSampleFromJson(obj)?.let {
+                        samples.add(it)
+                        if (samples.size >= maxSampleCap) break
+                    }
+                } catch (_: Exception) {}
+            }
+
+            if (lineNum % 500 == 0L) {
+                onProgress?.invoke(lineNum, samples.size)
+            }
+        }
+
+        if (samples.isEmpty()) return emptyResult("JSON / JSONL")
+        val counts = samples.groupingBy { it.className }.eachCount()
+        return ParseResult(
+            formatName = "🤖 LLM Instruction Dataset (JSONL / Dolly / Alpaca)",
+            samples = samples,
+            classCounts = counts,
+            totalLinesScanned = lineNum,
+            isCapped = samples.size >= maxSampleCap
+        )
+    }
+
+    private fun extractSampleFromJson(obj: JSONObject): ParsedSample? {
+        // Priority 1: Dolly format (category + instruction + response)
+        val category = obj.optString("category", "").trim()
+        val instruction = obj.optString("instruction", "").trim()
+        val response = obj.optString("response", "").ifEmpty { obj.optString("output", "") }.trim()
+        val context = obj.optString("context", "").trim()
+
+        if (category.isNotEmpty()) {
+            val content = buildString {
+                if (instruction.isNotEmpty()) append(instruction).append(" ")
+                if (context.isNotEmpty()) append(context).append(" ")
+                if (response.isNotEmpty()) append(response)
+            }.trim()
+            if (content.isNotEmpty()) {
+                return ParsedSample(sanitizeClassName(category), content)
+            }
+        }
+
+        // Priority 2: Standard label + text
+        val labelKey = listOf("label", "class", "category", "target", "sentiment", "speaker", "tag", "intent").firstOrNull { obj.has(it) }
+        val textKey = listOf("text", "content", "sentence", "message", "utterance", "review", "line", "body", "input").firstOrNull { obj.has(it) }
+        if (labelKey != null && textKey != null) {
+            val label = sanitizeClassName(obj.optString(labelKey, ""))
+            val content = obj.optString(textKey, "").trim()
+            if (label.isNotEmpty() && content.isNotEmpty()) {
+                return ParsedSample(label, content)
+            }
+        }
+
+        // Priority 3: Alpaca format without category (instruction -> label, output -> text)
+        if (instruction.isNotEmpty() && response.isNotEmpty()) {
+            val label = sanitizeClassName(instruction.take(30))
+            val content = if (obj.optString("input", "").isNotEmpty()) "${obj.optString("input")}\n$response" else response
+            return ParsedSample(label, content)
+        }
+
+        return null
+    }
+
+    /**
+     * Parse Dialogue / Transcript Format (e.g. Shakespeare "First Citizen:\n...")
+     */
+    private fun parseDialogueStream(
+        reader: BufferedReader,
+        maxSampleCap: Int,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)?
+    ): ParseResult {
+        val speakerRegex = "^(?:\\[([A-Za-z0-9_\u0980-\u09FF\\s\\-\\.\\(\\)'\"]{1,45})\\]|([A-Za-z0-9_\u0980-\u09FF\\s\\-\\.\\(\\)'\"]{1,45}))\\s*[:\\-]\\s*(.*)$".toRegex()
         val samples = mutableListOf<ParsedSample>()
         var currentSpeaker: String? = null
         val currentTextBuilder = StringBuilder()
+        var lineNum = 0L
 
-        for (line in lines) {
-            val trimmedLine = line.trim()
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            lineNum++
+            val trimmedLine = line?.trim() ?: continue
             if (trimmedLine.isEmpty()) continue
 
             val match = speakerRegex.matchEntire(trimmedLine)
@@ -249,17 +508,16 @@ Strike at the heaven with your staves as lift them"""
                 val rawCandidate = (match.groupValues[1].ifEmpty { match.groupValues[2] }).trim()
                 val inlineText = match.groupValues[3].trim()
 
-                // Check that candidate looks like a persona / speaker label, not normal narrative
                 if (rawCandidate.length in 1..40 &&
                     !rawCandidate.contains("?") &&
                     !rawCandidate.contains("!") &&
                     !rawCandidate.contains(";") &&
                     rawCandidate.split(" ").size <= 5
                 ) {
-                    // Flush previous speaker's accumulated dialogue
                     if (currentSpeaker != null && currentTextBuilder.isNotBlank()) {
                         samples.add(ParsedSample(currentSpeaker, currentTextBuilder.toString().trim()))
                         currentTextBuilder.clear()
+                        if (samples.size >= maxSampleCap) break
                     }
 
                     currentSpeaker = sanitizeClassName(rawCandidate.removeSuffix("."))
@@ -274,114 +532,155 @@ Strike at the heaven with your staves as lift them"""
                 if (currentTextBuilder.isNotEmpty()) currentTextBuilder.append(" ")
                 currentTextBuilder.append(trimmedLine)
             }
+
+            if (lineNum % 500 == 0L) {
+                onProgress?.invoke(lineNum, samples.size)
+            }
         }
 
-        // Flush last sample
-        if (currentSpeaker != null && currentTextBuilder.isNotBlank()) {
+        if (currentSpeaker != null && currentTextBuilder.isNotBlank() && samples.size < maxSampleCap) {
             samples.add(ParsedSample(currentSpeaker, currentTextBuilder.toString().trim()))
         }
 
-        if (samples.isEmpty()) return null
-
+        if (samples.isEmpty()) return emptyResult("Dialogue Transcript")
         val counts = samples.groupingBy { it.className }.eachCount()
         return ParseResult(
             formatName = "🎭 Shakespeare / Drama Dialogue Transcript",
             samples = samples,
-            classCounts = counts
+            classCounts = counts,
+            totalLinesScanned = lineNum,
+            isCapped = samples.size >= maxSampleCap
         )
     }
 
     /**
-     * Parses inline colon format:
-     * Label: text here...
-     * Label2: text here...
+     * Generic CSV / TSV Parser
      */
-    private fun tryParseInlineColon(text: String): ParseResult? {
-        val lines = text.lines()
+    private fun parseGenericCsvStream(
+        reader: BufferedReader,
+        maxSampleCap: Int,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)?
+    ): ParseResult {
         val samples = mutableListOf<ParsedSample>()
+        var lineNum = 0L
+        val firstLine = reader.readLine() ?: return emptyResult("CSV/TSV")
+        lineNum++
 
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-
-            val colonIdx = trimmed.indexOf(':')
-            if (colonIdx in 1..35) {
-                val label = sanitizeClassName(trimmed.substring(0, colonIdx).trim())
-                val content = trimmed.substring(colonIdx + 1).trim()
-                if (content.isNotEmpty()) {
-                    samples.add(ParsedSample(label, content))
-                }
-            }
-        }
-
-        if (samples.size < 2) return null
-        val counts = samples.groupingBy { it.className }.eachCount()
-        return ParseResult(
-            formatName = "Inline Labelled Lines (Label: Text)",
-            samples = samples,
-            classCounts = counts
-        )
-    }
-
-    /**
-     * Parses CSV or TSV files.
-     */
-    private fun tryParseCsvOrTsv(text: String): ParseResult? {
-        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        if (lines.size < 2) return null
-
-        val delimiter = if (lines[0].contains("\t")) '\t' else if (lines[0].contains(";")) ';' else ','
-        val samples = mutableListOf<ParsedSample>()
+        val delimiter = if (firstLine.contains("\t")) '\t' else if (firstLine.contains(";")) ';' else ','
+        val firstCols = splitCsvLine(firstLine, delimiter)
 
         var labelCol = -1
         var textCol = -1
 
-        // Check header line
-        val firstCols = splitCsvLine(lines[0], delimiter)
         if (firstCols.size >= 2) {
             for ((idx, col) in firstCols.withIndex()) {
                 val lower = col.lowercase(Locale.ROOT)
-                if (lower in listOf("label", "class", "category", "target", "sentiment", "speaker")) {
+                if (lower in listOf("label", "class", "category", "target", "sentiment", "speaker", "intent", "tag", "topic", "answer")) {
                     labelCol = idx
                 }
-                if (lower in listOf("text", "content", "sentence", "message", "utterance", "review", "line")) {
+                if (lower in listOf("text", "content", "sentence", "message", "utterance", "review", "line", "question", "prompt", "input", "body")) {
                     textCol = idx
                 }
             }
         }
 
-        val startIdx = if (labelCol != -1 && textCol != -1) 1 else 0
-
-        // If not found from header, heuristically decide by length
-        if (labelCol == -1 || textCol == -1) {
-            val sampleCols = splitCsvLine(lines[startIdx], delimiter)
-            if (sampleCols.size < 2) return null
-            if (sampleCols[0].length <= sampleCols[1].length) {
-                labelCol = 0
-                textCol = 1
-            } else {
-                labelCol = 1
-                textCol = 0
+        val hasHeader = (labelCol != -1 && textCol != -1)
+        if (!hasHeader) {
+            if (firstCols.size >= 2) {
+                if (firstCols[0].length <= firstCols[1].length) {
+                    labelCol = 0
+                    textCol = 1
+                } else {
+                    labelCol = 1
+                    textCol = 0
+                }
+                // Include first line as sample since it wasn't header
+                val l = sanitizeClassName(firstCols[labelCol])
+                val t = firstCols[textCol].trim()
+                if (l.isNotEmpty() && t.isNotEmpty()) {
+                    samples.add(ParsedSample(l, t))
+                }
             }
         }
 
-        for (i in startIdx until lines.size) {
-            val cols = splitCsvLine(lines[i], delimiter)
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            lineNum++
+            val l = line?.trim() ?: continue
+            if (l.isEmpty()) continue
+
+            val cols = splitCsvLine(l, delimiter)
             if (cols.size > maxOf(labelCol, textCol)) {
                 val label = sanitizeClassName(cols[labelCol].trim())
                 val content = cols[textCol].trim()
                 if (label.isNotEmpty() && content.isNotEmpty()) {
                     samples.add(ParsedSample(label, content))
+                    if (samples.size >= maxSampleCap) break
                 }
+            }
+
+            if (lineNum % 500 == 0L) {
+                onProgress?.invoke(lineNum, samples.size)
             }
         }
 
-        if (samples.size < 2) return null
+        if (samples.isEmpty()) return emptyResult("CSV/TSV")
         val counts = samples.groupingBy { it.className }.eachCount()
         return ParseResult(
-            formatName = if (delimiter == '\t') "TSV (Tab-Separated)" else "CSV (Comma-Separated)",
+            formatName = if (delimiter == '\t') "TSV (Tab-Separated Dataset)" else "CSV (Comma-Separated Dataset)",
             samples = samples,
-            classCounts = counts
+            classCounts = counts,
+            totalLinesScanned = lineNum,
+            isCapped = samples.size >= maxSampleCap
+        )
+    }
+
+    /**
+     * Section Headers Parser ([Category] / # Category)
+     */
+    private fun parseSectionHeadersStream(
+        reader: BufferedReader,
+        maxSampleCap: Int,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)?
+    ): ParseResult {
+        val samples = mutableListOf<ParsedSample>()
+        val sectionRegex = "^(?:\\[(.*)\\]|#+\\s+(.*)|===+\\s*(.*?)\\s*===+)$".toRegex()
+        var currentSection: String? = null
+        var lineNum = 0L
+
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            lineNum++
+            val trimmed = line?.trim() ?: continue
+            if (trimmed.isEmpty()) continue
+
+            val match = sectionRegex.matchEntire(trimmed)
+            if (match != null) {
+                val name = match.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.trim()
+                if (!name.isNullOrBlank()) {
+                    currentSection = sanitizeClassName(name)
+                    continue
+                }
+            }
+
+            if (currentSection != null && trimmed.isNotEmpty()) {
+                samples.add(ParsedSample(currentSection, trimmed))
+                if (samples.size >= maxSampleCap) break
+            }
+
+            if (lineNum % 500 == 0L) {
+                onProgress?.invoke(lineNum, samples.size)
+            }
+        }
+
+        if (samples.isEmpty()) return emptyResult("Section Headers")
+        val counts = samples.groupingBy { it.className }.eachCount()
+        return ParseResult(
+            formatName = "📑 Section Headers ([Category] / # Category)",
+            samples = samples,
+            classCounts = counts,
+            totalLinesScanned = lineNum,
+            isCapped = samples.size >= maxSampleCap
         )
     }
 
@@ -404,107 +703,20 @@ Strike at the heaven with your staves as lift them"""
         return result
     }
 
-    /**
-     * Parses Section Header format:
-     * [Positive]
-     * Great app!
-     * Love this!
-     *
-     * [Negative]
-     * Awful crash
-     */
-    private fun tryParseSectionHeaders(text: String): ParseResult? {
-        val lines = text.lines()
-        val samples = mutableListOf<ParsedSample>()
-        var currentSection: String? = null
-
-        val sectionRegex = "^(?:\\[(.*)\\]|#+\\s+(.*)|===+\\s*(.*?)\\s*===+)$".toRegex()
-
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) continue
-
-            val match = sectionRegex.matchEntire(trimmed)
-            if (match != null) {
-                val name = match.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.trim()
-                if (!name.isNullOrBlank()) {
-                    currentSection = sanitizeClassName(name)
-                    continue
-                }
-            }
-
-            if (currentSection != null && trimmed.isNotEmpty()) {
-                samples.add(ParsedSample(currentSection, trimmed))
-            }
-        }
-
-        if (samples.size < 2) return null
-        val counts = samples.groupingBy { it.className }.eachCount()
+    private fun emptyResult(formatName: String): ParseResult {
         return ParseResult(
-            formatName = "Section Headers ([Category] / # Category)",
-            samples = samples,
-            classCounts = counts
+            formatName = formatName,
+            samples = emptyList(),
+            classCounts = emptyMap(),
+            errorMessage = "No valid samples could be extracted for format: $formatName."
         )
     }
 
-    /**
-     * Parses JSON Array or JSONL.
-     */
-    private fun tryParseJsonOrJsonl(text: String): ParseResult? {
-        val samples = mutableListOf<ParsedSample>()
-
-        fun extractSample(obj: JSONObject): ParsedSample? {
-            val labelKey = listOf("label", "class", "category", "target", "sentiment", "speaker", "tag").firstOrNull { obj.has(it) }
-            val textKey = listOf("text", "content", "sentence", "message", "utterance", "review", "line", "body").firstOrNull { obj.has(it) }
-            if (labelKey != null && textKey != null) {
-                val label = sanitizeClassName(obj.optString(labelKey, ""))
-                val content = obj.optString(textKey, "").trim()
-                if (label.isNotEmpty() && content.isNotEmpty()) {
-                    return ParsedSample(label, content)
-                }
-            }
-            return null
-        }
-
-        // Try JSON Array
-        if (text.startsWith("[")) {
-            try {
-                val arr = JSONArray(text)
-                for (i in 0 until arr.length()) {
-                    val item = arr.optJSONObject(i) ?: continue
-                    extractSample(item)?.let { samples.add(it) }
-                }
-            } catch (_: Exception) {}
-        }
-
-        // Try JSONL
-        if (samples.isEmpty()) {
-            val lines = text.lines()
-            for (line in lines) {
-                val trimmed = line.trim()
-                if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-                    try {
-                        val obj = JSONObject(trimmed)
-                        extractSample(obj)?.let { samples.add(it) }
-                    } catch (_: Exception) {}
-                }
-            }
-        }
-
-        if (samples.isEmpty()) return null
-        val counts = samples.groupingBy { it.className }.eachCount()
-        return ParseResult(
-            formatName = if (text.startsWith("[")) "JSON Array" else "JSONL (Lines)",
-            samples = samples,
-            classCounts = counts
-        )
-    }
-
-    private fun sanitizeClassName(name: String): String {
+    fun sanitizeClassName(name: String): String {
         return name
             .replace("[^a-zA-Z0-9\\s\\-_\u0980-\u09FF]".toRegex(), "")
             .trim()
-            .take(30)
+            .take(35)
             .ifEmpty { "Class" }
     }
 }

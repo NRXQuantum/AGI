@@ -35,17 +35,19 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.ml.TextDatasetParser
-import com.example.ml.TextModelEngine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Comprehensive Database & File Import Dialog for Text NLP Projects.
+ * Universal, Memory-Safe Database & File Import Dialog for Text NLP Projects.
  *
  * Supports:
- * 1. Uploading input.txt, CSV, TSV, JSON files via Android System Document/File Picker
- * 2. Pasting or editing raw file content
- * 3. 1-Tap Preloading Shakespeare Coriolanus dialogue sample (user's input.txt structure)
- * 4. Auto-detecting file format (Shakespeare dialogue, CSV, JSON, section headers)
- * 5. Interactive class selection and sample preview before inserting into the local Room database
+ * 1. Uploading input.txt, CSV, TSV, JSON, JSONL files via Android Document Picker (500MB+ Safe).
+ * 2. Multi-Format Strategies (QA pairs, Dolly/Alpaca instruction tuning, Shakespeare dialogues, CSV/TSV, Section headers).
+ * 3. Preloaded benchmark samples (Shakespeare Coriolanus, Bangladesh GK QA, Dolly JSONL).
+ * 4. Streaming line-by-line parser with zero OOM risk and live progress reporting.
+ * 5. Interactive class filtering, sample preview, and memory protection badge.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,61 +56,108 @@ fun TextDatabaseImportDialog(
     onImportConfirmed: (parseResult: TextDatasetParser.ParseResult, replaceExisting: Boolean) -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
-    var selectedTab by remember { mutableStateOf(0) } // 0: File Upload, 1: Text Paste/Edit, 2: Shakespeare Sample
+    var selectedTab by remember { mutableStateOf(0) } // 0: File Upload, 1: Text Paste/Edit, 2: Preloaded Examples
+    var selectedStrategy by remember { mutableStateOf(TextDatasetParser.DatasetFormatStrategy.AUTO_DETECT) }
+
     var rawText by remember { mutableStateOf("") }
     var loadedFileName by remember { mutableStateOf<String?>(null) }
     var loadedFileSize by remember { mutableStateOf<String?>(null) }
+
+    var isStreamingParsing by remember { mutableStateOf(false) }
+    var streamProgressLines by remember { mutableLongStateOf(0L) }
+    var streamProgressSamples by remember { mutableIntStateOf(0) }
+
+    var streamingParseResult by remember { mutableStateOf<TextDatasetParser.ParseResult?>(null) }
 
     var replaceExisting by remember { mutableStateOf(false) }
     var minSampleThreshold by remember { mutableStateOf(1) }
     var excludedClasses by remember { mutableStateOf(setOf<String>()) }
     var isImporting by remember { mutableStateOf(false) }
 
-    // Parse result derived from rawText
-    val baseParseResult = remember(rawText) {
-        if (rawText.isBlank()) null else TextDatasetParser.parse(rawText)
+    // Active parse result (either from streaming file or from text area)
+    val effectiveBaseResult = remember(streamingParseResult, rawText, selectedStrategy) {
+        if (streamingParseResult != null) {
+            streamingParseResult
+        } else if (rawText.isNotBlank()) {
+            TextDatasetParser.parse(rawText, selectedStrategy)
+        } else {
+            null
+        }
     }
 
     // Filtered parse result based on UI selections
-    val filteredParseResult = remember(baseParseResult, minSampleThreshold, excludedClasses) {
-        baseParseResult
+    val filteredParseResult = remember(effectiveBaseResult, minSampleThreshold, excludedClasses) {
+        effectiveBaseResult
             ?.filterByMinSamples(minSampleThreshold)
-            ?.filterBySelectedClasses(baseParseResult.classCounts.keys - excludedClasses)
+            ?.filterBySelectedClasses(effectiveBaseResult.classCounts.keys - excludedClasses)
     }
 
-    // File picker launcher for .txt, .csv, .tsv, .json or any text file
+    // Memory-safe streaming file picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                val contentResolver = context.contentResolver
-                // Retrieve display name
-                var displayName = "uploaded_file.txt"
-                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                    if (cursor.moveToFirst()) {
-                        if (nameIndex >= 0) displayName = cursor.getString(nameIndex) ?: displayName
-                        if (sizeIndex >= 0) {
-                            val sizeBytes = cursor.getLong(sizeIndex)
-                            loadedFileSize = if (sizeBytes > 1024) "${sizeBytes / 1024} KB" else "$sizeBytes bytes"
+            coroutineScope.launch {
+                isStreamingParsing = true
+                streamProgressLines = 0L
+                streamProgressSamples = 0
+                streamingParseResult = null
+                rawText = ""
+
+                try {
+                    val contentResolver = context.contentResolver
+                    var displayName = "uploaded_file.txt"
+                    var sizeBytes = 0L
+
+                    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (cursor.moveToFirst()) {
+                            if (nameIndex >= 0) displayName = cursor.getString(nameIndex) ?: displayName
+                            if (sizeIndex >= 0) sizeBytes = cursor.getLong(sizeIndex)
                         }
                     }
-                }
 
-                val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
-                if (text.isNotBlank()) {
-                    rawText = text
                     loadedFileName = displayName
-                    selectedTab = 0 // Keep on file view
-                    Toast.makeText(context, "Loaded $displayName (${text.lines().size} lines)", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Selected file is empty.", Toast.LENGTH_SHORT).show()
+                    loadedFileSize = when {
+                        sizeBytes > 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", sizeBytes / (1024.0 * 1024.0))
+                        sizeBytes > 1024 -> "${sizeBytes / 1024} KB"
+                        else -> "$sizeBytes bytes"
+                    }
+
+                    // Parse stream in background without allocating full string in RAM
+                    val result = withContext(Dispatchers.IO) {
+                        contentResolver.openInputStream(uri)?.use { stream ->
+                            TextDatasetParser.parseStream(
+                                inputStream = stream,
+                                strategy = selectedStrategy,
+                                maxSampleCap = 40_000,
+                                onProgress = { lines, samples ->
+                                    streamProgressLines = lines
+                                    streamProgressSamples = samples
+                                }
+                            )
+                        }
+                    }
+
+                    if (result != null && result.samples.isNotEmpty()) {
+                        streamingParseResult = result
+                        selectedTab = 0
+                        Toast.makeText(
+                            context,
+                            "Parsed ${result.samples.size} samples across ${result.classCounts.size} classes!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(context, "No valid samples identified in file.", Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Throwable) {
+                    Toast.makeText(context, "Error reading file: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    isStreamingParsing = false
                 }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Failed to read file: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -158,9 +207,9 @@ fun TextDatabaseImportDialog(
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "Auto-parse input.txt, dialogues, CSV, JSON",
+                                text = "Multi-Format • Memory-Safe Stream • QA / JSONL / TXT",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -173,9 +222,76 @@ fun TextDatabaseImportDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Source Tabs
+                // Memory-Safe RAM Protection Banner
+                Surface(
+                    color = Color(0xFF10B981).copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Memory,
+                            contentDescription = null,
+                            tint = Color(0xFF059669),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "⚡ Out-of-Core Stream Engine: 500MB+ dataset safe with zero OOM phone crash",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color(0xFF065F46)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Format Strategy Selector Chips
+                Text(
+                    text = "Parsing Format Strategy (ফরম্যাট সনাক্তকরণ পদ্ধতি):",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(TextDatasetParser.DatasetFormatStrategy.entries) { strat ->
+                        FilterChip(
+                            selected = selectedStrategy == strat,
+                            onClick = {
+                                selectedStrategy = strat
+                                // If we had raw text, trigger re-parse
+                                if (rawText.isNotBlank()) {
+                                    streamingParseResult = null
+                                }
+                            },
+                            label = {
+                                Text(
+                                    strat.title,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selectedStrategy == strat) FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            leadingIcon = {
+                                if (selectedStrategy == strat) {
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp))
+                                }
+                            }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Tabs: 0: File Upload, 1: Text Paste/Edit, 2: Preloaded Examples
                 PrimaryTabRow(
                     selectedTabIndex = selectedTab,
                     modifier = Modifier.fillMaxWidth()
@@ -183,247 +299,30 @@ fun TextDatabaseImportDialog(
                     Tab(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Upload File", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
+                        text = { Text("Upload File (500MB)", maxLines = 1, fontSize = 12.sp) },
+                        icon = { Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.EditNote, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Paste Text", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
+                        text = { Text("Paste / Edit Text", maxLines = 1, fontSize = 12.sp) },
+                        icon = { Icon(Icons.Default.EditNote, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                     Tab(
                         selected = selectedTab == 2,
-                        onClick = {
-                            selectedTab = 2
-                            rawText = TextDatasetParser.SHAKESPEARE_CORIOLANUS_SAMPLE
-                            loadedFileName = "input.txt (Shakespeare Sample)"
-                            loadedFileSize = "3.2 KB"
-                        },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("🎭", fontSize = 14.sp)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Shakespeare input.txt", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
+                        onClick = { selectedTab = 2 },
+                        text = { Text("Sample Datasets", maxLines = 1, fontSize = 12.sp) },
+                        icon = { Icon(Icons.Default.Dataset, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Content Area based on Tab
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
+                // Tab Viewport (Weight 1f)
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when (selectedTab) {
                         0 -> {
-                            // File Upload View
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                // Upload Trigger Box
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { filePickerLauncher.launch("*/*") },
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                                    ),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(20.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Icon(
-                                            Icons.Default.DriveFolderUpload,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(48.dp),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = if (loadedFileName != null) "Selected: $loadedFileName" else "Tap to Choose Dataset File",
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        if (loadedFileSize != null) {
-                                            Text(
-                                                text = "Size: $loadedFileSize • ${rawText.lines().size} lines",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "Supports: input.txt, .txt, .csv, .tsv, .json",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        Button(
-                                            onClick = { filePickerLauncher.launch("*/*") },
-                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                                        ) {
-                                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(if (loadedFileName != null) "Choose Another File" else "Browse Files")
-                                        }
-                                    }
-                                }
-
-                                // Quick 1-tap Shakespeare button
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            rawText = TextDatasetParser.SHAKESPEARE_CORIOLANUS_SAMPLE
-                                            loadedFileName = "input.txt (Shakespeare Sample)"
-                                            loadedFileSize = "3.2 KB"
-                                        },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                    )
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(14.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("🎭", fontSize = 28.sp)
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = "Load Your 'input.txt' Shakespeare Sample",
-                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                                            )
-                                            Text(
-                                                text = "Includes First Citizen, All, Second Citizen & MENENIUS dialogues",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        FilledTonalButton(
-                                            onClick = {
-                                                rawText = TextDatasetParser.SHAKESPEARE_CORIOLANUS_SAMPLE
-                                                loadedFileName = "input.txt (Shakespeare Sample)"
-                                                loadedFileSize = "3.2 KB"
-                                            },
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            modifier = Modifier.height(34.dp)
-                                        ) {
-                                            Text("Load Sample", fontSize = 11.sp)
-                                        }
-                                    }
-                                }
-
-                                // Parser Results Section
-                                if (filteredParseResult != null) {
-                                    ParserResultsInspector(
-                                        parseResult = filteredParseResult,
-                                        baseClassCounts = baseParseResult?.classCounts ?: emptyMap(),
-                                        excludedClasses = excludedClasses,
-                                        onToggleClass = { cls ->
-                                            excludedClasses = if (cls in excludedClasses) excludedClasses - cls else excludedClasses + cls
-                                        },
-                                        minThreshold = minSampleThreshold,
-                                        onThresholdChange = { minSampleThreshold = it },
-                                        replaceExisting = replaceExisting,
-                                        onReplaceToggle = { replaceExisting = it }
-                                    )
-                                }
-                            }
-                        }
-
-                        1 -> {
-                            // Raw Paste View
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "Paste entire file content (input.txt, CSV, etc.):",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    if (rawText.isNotBlank()) {
-                                        TextButton(onClick = { rawText = ""; loadedFileName = null }) {
-                                            Text("Clear", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-
-                                OutlinedTextField(
-                                    value = rawText,
-                                    onValueChange = {
-                                        rawText = it
-                                        loadedFileName = "Pasted Text"
-                                    },
-                                    placeholder = {
-                                        Text(
-                                            "First Citizen:\nBefore we proceed any further, hear me speak.\n\nAll:\nSpeak, speak.\n\nMENENIUS:\nWhat work's, my countrymen...",
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 12.sp
-                                        )
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
-                                )
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                if (filteredParseResult != null) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Text(
-                                                text = "Format: ${filteredParseResult.formatName}",
-                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                            Text(
-                                                text = "${filteredParseResult.samples.size} samples across ${filteredParseResult.classCounts.size} classes",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        2 -> {
-                            // Shakespeare Preload Preview
+                            // File Upload Tab
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -431,76 +330,227 @@ fun TextDatabaseImportDialog(
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Surface(
-                                    color = Color(0xFF10B981).copy(alpha = 0.12f),
-                                    shape = RoundedCornerShape(12.dp),
-                                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.4f))
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !isStreamingParsing) {
+                                            filePickerLauncher.launch("*/*")
+                                        }
                                 ) {
-                                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🎭", fontSize = 24.sp)
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Column {
-                                            Text(
-                                                text = "Shakespeare: Coriolanus (Act I, Scene I)",
-                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = Color(0xFF047857))
-                                            )
-                                            Text(
-                                                text = "Matches your provided input.txt format with 4 speaker roles and real dialogues.",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                    Column(
+                                        modifier = Modifier.padding(20.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(
+                                            Icons.Default.FolderOpen,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(42.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = if (loadedFileName != null) "File: $loadedFileName" else "Select Large Database or Script File",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = if (loadedFileSize != null) "Size: $loadedFileSize • Tap to change file" else "Supports .txt, .csv, .tsv, .json, .jsonl (up to 500MB+)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                if (isStreamingParsing) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.5.dp)
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column {
+                                                Text(
+                                                    "Streaming & Parsing Database...",
+                                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                                )
+                                                Text(
+                                                    "$streamProgressLines lines scanned • $streamProgressSamples samples extracted",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     }
                                 }
 
-                                if (filteredParseResult != null) {
-                                    ParserResultsInspector(
-                                        parseResult = filteredParseResult,
-                                        baseClassCounts = baseParseResult?.classCounts ?: emptyMap(),
+                                // Results Preview
+                                if (effectiveBaseResult != null) {
+                                    DatasetPreviewCard(
+                                        result = effectiveBaseResult,
+                                        filteredResult = filteredParseResult,
+                                        minSampleThreshold = minSampleThreshold,
+                                        onMinSampleChange = { minSampleThreshold = it },
                                         excludedClasses = excludedClasses,
-                                        onToggleClass = { cls ->
-                                            excludedClasses = if (cls in excludedClasses) excludedClasses - cls else excludedClasses + cls
-                                        },
-                                        minThreshold = minSampleThreshold,
-                                        onThresholdChange = { minSampleThreshold = it },
-                                        replaceExisting = replaceExisting,
-                                        onReplaceToggle = { replaceExisting = it }
+                                        onToggleClass = { className ->
+                                            excludedClasses = if (excludedClasses.contains(className)) {
+                                                excludedClasses - className
+                                            } else {
+                                                excludedClasses + className
+                                            }
+                                        }
                                     )
                                 }
+                            }
+                        }
+
+                        1 -> {
+                            // Text Paste Tab
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                OutlinedTextField(
+                                    value = rawText,
+                                    onValueChange = {
+                                        rawText = it
+                                        streamingParseResult = null
+                                    },
+                                    placeholder = { Text("Paste raw dataset here (e.g. CSV lines, Dolly JSONL, Shakespeare dialogue)...") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                                )
+
+                                if (effectiveBaseResult != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    DatasetPreviewCard(
+                                        result = effectiveBaseResult,
+                                        filteredResult = filteredParseResult,
+                                        minSampleThreshold = minSampleThreshold,
+                                        onMinSampleChange = { minSampleThreshold = it },
+                                        excludedClasses = excludedClasses,
+                                        onToggleClass = { className ->
+                                            excludedClasses = if (excludedClasses.contains(className)) {
+                                                excludedClasses - className
+                                            } else {
+                                                excludedClasses + className
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        2 -> {
+                            // Preloaded Examples Tab
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    "Ready-to-Use Benchmark Datasets:",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                )
+
+                                // Example 1: Shakespeare Coriolanus
+                                SampleDatasetCard(
+                                    title = "🎭 Shakespeare Coriolanus Dialogue (Drama Script)",
+                                    subtitle = "Speaker: Dialogue format (First Citizen, MENENIUS, All, etc.)",
+                                    sampleSnippet = "First Citizen:\nYou are all resolved rather to die than to famish?\n\nMENENIUS:\nWhat work's, my countrymen, in hand?",
+                                    onLoad = {
+                                        rawText = TextDatasetParser.SHAKESPEARE_CORIOLANUS_SAMPLE
+                                        selectedStrategy = TextDatasetParser.DatasetFormatStrategy.SHAKESPEARE_DIALOGUE
+                                        streamingParseResult = null
+                                        selectedTab = 1
+                                    }
+                                )
+
+                                // Example 2: Bangladesh GK QA
+                                SampleDatasetCard(
+                                    title = "📋 Bangladesh GK & Questions (QA Pairs CSV)",
+                                    subtitle = "question,answer format for Knowledge Base & Quiz classification",
+                                    sampleSnippet = "question,answer\nবাংলাদেশের দীর্ঘতম নদী কোনটি?,মেঘনা\nকোন সংস্থা GDP হিসাব করে?,বাংলাদেশ পরিসংখ্যান ব্যুরো",
+                                    onLoad = {
+                                        rawText = TextDatasetParser.BANGLADESH_GK_QA_SAMPLE
+                                        selectedStrategy = TextDatasetParser.DatasetFormatStrategy.QA_QUESTION_ANSWER
+                                        streamingParseResult = null
+                                        selectedTab = 1
+                                    }
+                                )
+
+                                // Example 3: Instruction JSONL
+                                SampleDatasetCard(
+                                    title = "🤖 LLM Instruction Tuning (Dolly / Alpaca JSONL)",
+                                    subtitle = "{\"instruction\": \"...\", \"response\": \"...\", \"category\": \"...\"}",
+                                    sampleSnippet = "{\"instruction\": \"When did Virgin Australia start?\", \"category\": \"closed_qa\", \"response\": \"31 August 2000\"}",
+                                    onLoad = {
+                                        rawText = TextDatasetParser.INSTRUCTION_JSONL_SAMPLE
+                                        selectedStrategy = TextDatasetParser.DatasetFormatStrategy.INSTRUCTION_RESPONSE
+                                        streamingParseResult = null
+                                        selectedTab = 1
+                                    }
+                                )
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Bottom Action Bar
-                HorizontalDivider()
                 Spacer(modifier = Modifier.height(10.dp))
 
+                // Replace Existing Toggle
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(
+                    Checkbox(
+                        checked = replaceExisting,
+                        onCheckedChange = { replaceExisting = it }
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Replace existing project classes & samples with this database",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Bottom Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
                         onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
                         enabled = !isImporting
                     ) {
                         Text("Cancel")
                     }
 
-                    val validSampleCount = filteredParseResult?.samples?.size ?: 0
-                    val validClassCount = filteredParseResult?.classCounts?.size ?: 0
+                    val canImport = filteredParseResult != null &&
+                            filteredParseResult.samples.isNotEmpty() &&
+                            filteredParseResult.classCounts.size >= 2 &&
+                            !isStreamingParsing
 
                     Button(
                         onClick = {
-                            if (filteredParseResult != null && validSampleCount > 0) {
+                            filteredParseResult?.let { res ->
                                 isImporting = true
-                                onImportConfirmed(filteredParseResult, replaceExisting)
+                                onImportConfirmed(res, replaceExisting)
                             }
                         },
-                        enabled = validSampleCount > 0 && validClassCount >= 2 && !isImporting,
-                        shape = RoundedCornerShape(12.dp)
+                        enabled = canImport && !isImporting,
+                        modifier = Modifier.weight(1.5f)
                     ) {
                         if (isImporting) {
                             CircularProgressIndicator(
@@ -509,14 +559,11 @@ fun TextDatabaseImportDialog(
                                 color = MaterialTheme.colorScheme.onPrimary
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Importing...")
+                            Text("Importing Database...")
                         } else {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.DownloadDone, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                if (validSampleCount > 0) "Import $validSampleCount Samples ($validClassCount Classes)"
-                                else "Select Valid Dataset"
-                            )
+                            Text("Import ${filteredParseResult?.samples?.size ?: 0} Samples")
                         }
                     }
                 }
@@ -525,155 +572,118 @@ fun TextDatabaseImportDialog(
     }
 }
 
-/**
- * Inspector sub-component for parsed database preview
- */
 @Composable
-private fun ParserResultsInspector(
-    parseResult: TextDatasetParser.ParseResult,
-    baseClassCounts: Map<String, Int>,
-    excludedClasses: Set<String>,
-    onToggleClass: (String) -> Unit,
-    minThreshold: Int,
-    onThresholdChange: (Int) -> Unit,
-    replaceExisting: Boolean,
-    onReplaceToggle: (Boolean) -> Unit
+fun SampleDatasetCard(
+    title: String,
+    subtitle: String,
+    sampleSnippet: String,
+    onLoad: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-        )
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Format & Metrics Badges
+        Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = "Format: ${parseResult.formatName}",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = title, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                    Text(text = subtitle, style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = onLoad,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Text("Load", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = sampleSnippet,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
+                    modifier = Modifier.padding(8.dp),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DatasetPreviewCard(
+    result: TextDatasetParser.ParseResult,
+    filteredResult: TextDatasetParser.ParseResult?,
+    minSampleThreshold: Int,
+    onMinSampleChange: (Int) -> Unit,
+    excludedClasses: Set<String>,
+    onToggleClass: (String) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = result.formatName,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
 
                 Surface(
-                    color = Color(0xFF10B981).copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(8.dp)
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        text = "⚡ ${parseResult.samples.size} Samples • ${parseResult.classCounts.size} Classes",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = Color(0xFF047857)),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        text = "${filteredResult?.samples?.size ?: 0} Samples • ${filteredResult?.classCounts?.size ?: 0} Classes",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
             }
 
-            // Detected Classes Chip Row
-            Text(
-                text = "Detected Classes / Roles (Tap to include/exclude):",
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-            )
+            Spacer(modifier = Modifier.height(8.dp))
 
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(baseClassCounts.entries.toList()) { (className, count) ->
-                    val isIncluded = className !in excludedClasses
+            // Discovered Classes chips
+            Text(
+                "Discovered Classes (Tap to toggle):",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(result.classCounts.entries.toList()) { (className, count) ->
+                    val isIncluded = !excludedClasses.contains(className)
                     FilterChip(
                         selected = isIncluded,
                         onClick = { onToggleClass(className) },
                         label = {
-                            Text("$className ($count)")
-                        },
-                        leadingIcon = {
-                            if (isIncluded) {
-                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
-                            }
-                        }
-                    )
-                }
-            }
-
-            // Samples Preview (First 5 samples)
-            Text(
-                text = "Sample Preview (First ${minOf(parseResult.samples.size, 5)}):",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                parseResult.samples.take(5).forEach { sample ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.secondaryContainer,
-                                    shape = RoundedCornerShape(4.dp)
-                                ) {
-                                    Text(
-                                        text = sample.className,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 10.sp
-                                        ),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                val tokenEstimate = sample.text.split("\\s+".toRegex()).size
-                                Text(
-                                    text = "~$tokenEstimate words",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 10.sp
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = sample.text,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
+                                text = "$className ($count)",
+                                fontSize = 11.sp,
+                                fontWeight = if (isIncluded) FontWeight.Bold else FontWeight.Normal
                             )
                         }
-                    }
-                }
-            }
-
-            // Import Destination Choice
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onReplaceToggle(!replaceExisting) }
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(
-                    checked = replaceExisting,
-                    onCheckedChange = { onReplaceToggle(it) }
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Column {
-                    Text(
-                        text = "Replace Existing Dataset",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Text(
-                        text = if (replaceExisting) "Old classes & samples will be wiped before importing" else "New classes & samples will be merged with current dataset",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

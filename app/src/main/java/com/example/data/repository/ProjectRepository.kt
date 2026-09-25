@@ -1957,10 +1957,12 @@ class ProjectRepository(
         }
 
         if (sampleEntities.isNotEmpty()) {
-            dao.insertTextSamplesBatch(sampleEntities)
+            sampleEntities.chunked(500).forEach { chunk ->
+                dao.insertTextSamplesBatch(chunk)
+            }
         }
 
-        val summary = parseResult.classCounts.entries.joinToString(", ") { "${it.key}: ${it.value}" }
+        val summary = parseResult.classCounts.entries.take(8).joinToString(", ") { "${it.key}: ${it.value}" } + (if (parseResult.classCounts.size > 8) "..." else "")
         "Successfully imported ${sampleEntities.size} samples across ${parseResult.classCounts.size} classes ($summary)!"
     }
 }

@@ -41,14 +41,13 @@ import com.example.data.db.ProjectEntity
 import com.example.data.db.TrainedModelEntity
 import com.example.ml.TextModelEngine
 import com.example.ui.viewmodel.ProjectViewModel
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 enum class TextStudioMode(val title: String, val titleBn: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    SENTENCE_ANALYSIS("Sentence Classifier", "একক বাক্য বিশ্লেষণ", Icons.Default.TextFields),
-    INTERACTIVE_CHAT("Dialogue & Model Chat", "ডায়লগ ও মডেল চ্যাট", Icons.Default.Chat)
+    INTERACTIVE_CHAT("Dialogue & Model Chat", "ডায়লগ ও মডেল চ্যাট", Icons.Default.Chat),
+    SENTENCE_ANALYSIS("Sentence Classifier", "একক বাক্য বিশ্লেষণ", Icons.Default.TextFields)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,7 +62,6 @@ fun TextInferenceStudio(
     onNavigateBack: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     var selectedStudioMode by remember { mutableStateOf(TextStudioMode.INTERACTIVE_CHAT) }
 
     // Tab 1 state: Single sentence classification
@@ -100,147 +98,140 @@ fun TextInferenceStudio(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "${project.name} • Test",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            text = if (selectedStudioMode == TextStudioMode.INTERACTIVE_CHAT) "Interactive Dialogue & Chat Test" else "Sentence Classifier & Explainable AI",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    if (onNavigateBack != null) {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        // 1. Model Status Banner & Retrain
+        Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+            if (latestModel == null) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Model Not Trained Yet",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                "Train this text dataset to activate live inference & dialogue chat.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = onNavigateToTrain,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Train")
                         }
                     }
-                },
-                actions = {
-                    IconButton(onClick = onNavigateToExport) {
-                        Icon(Icons.Outlined.FileDownload, contentDescription = "Export")
-                    }
                 }
-            )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // 1. Model Status Banner & Retrain
-            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                if (latestModel == null) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                        shape = RoundedCornerShape(12.dp)
+            } else {
+                Surface(
+                    color = Color(0xFF10B981).copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF059669),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "Model Not Trained Yet",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                    "Trained Model Active (${String.format(Locale.US, "%.1f%%", latestModel.accuracy * 100f)} Accuracy)",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFF065F46),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    "Train this text dataset to activate live inference & dialogue chat.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                    "${classes.size} Text Classes • On-Device Neural Engine",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF047857),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Button(
-                                onClick = onNavigateToTrain,
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                            ) {
-                                Text("Train")
-                            }
                         }
-                    }
-                } else {
-                    Surface(
-                        color = Color(0xFF10B981).copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.3f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        OutlinedButton(
+                            onClick = onNavigateToTrain,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, Color(0xFF059669).copy(alpha = 0.5f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF065F46)),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = Color(0xFF059669),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        "Trained Model Active (${String.format(Locale.US, "%.1f%%", latestModel.accuracy * 100f)} Accuracy)",
-                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = Color(0xFF065F46)
-                                    )
-                                    Text(
-                                        "${classes.size} Text Classes • On-Device Neural Engine",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color(0xFF047857)
-                                    )
-                                }
-                            }
-
-                            TextButton(
-                                onClick = onNavigateToTrain,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Text("Retrain", style = MaterialTheme.typography.labelMedium)
-                            }
+                            Text(
+                                "Retrain",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
                         }
                     }
                 }
             }
+        }
 
-            // 2. Mode Switcher (Sentence Classifier vs Dialogue Chat)
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
+        // 2. Mode Switcher (Sentence Classifier vs Dialogue Chat)
+        SingleChoiceSegmentedButtonRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 2.dp)
+        ) {
+            SegmentedButton(
+                selected = selectedStudioMode == TextStudioMode.INTERACTIVE_CHAT,
+                onClick = { selectedStudioMode = TextStudioMode.INTERACTIVE_CHAT },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                icon = { Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(16.dp)) }
             ) {
-                SegmentedButton(
-                    selected = selectedStudioMode == TextStudioMode.INTERACTIVE_CHAT,
-                    onClick = { selectedStudioMode = TextStudioMode.INTERACTIVE_CHAT },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    icon = { Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                ) {
-                    Text("Dialogue Chat", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-
-                SegmentedButton(
-                    selected = selectedStudioMode == TextStudioMode.SENTENCE_ANALYSIS,
-                    onClick = { selectedStudioMode = TextStudioMode.SENTENCE_ANALYSIS },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    icon = { Icon(Icons.Default.TextFields, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                ) {
-                    Text("Single Classifier", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
+                Text("Dialogue Chat", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
 
-            // 3. Tab Content
+            SegmentedButton(
+                selected = selectedStudioMode == TextStudioMode.SENTENCE_ANALYSIS,
+                onClick = { selectedStudioMode = TextStudioMode.SENTENCE_ANALYSIS },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                icon = { Icon(Icons.Default.TextFields, contentDescription = null, modifier = Modifier.size(16.dp)) }
+            ) {
+                Text("Single Classifier", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        }
+
+        // 3. Tab Content
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+        ) {
             when (selectedStudioMode) {
                 TextStudioMode.INTERACTIVE_CHAT -> {
                     InteractiveDialogueChatTab(
@@ -388,8 +379,6 @@ fun InteractiveDialogueChatTab(
     onClearChat: () -> Unit,
     onSaveFeedback: (String) -> Unit
 ) {
-    val context = LocalContext.current
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -403,11 +392,20 @@ fun InteractiveDialogueChatTab(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "💬 Model Dialogue Chat (${chatMessages.size} turns)",
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Forum,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Model Dialogue Chat (${chatMessages.size} turns)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
 
             if (chatMessages.isNotEmpty()) {
                 TextButton(
@@ -432,31 +430,30 @@ fun InteractiveDialogueChatTab(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(20.dp)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                         .verticalScroll(rememberScrollState()),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Surface(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
                         shape = CircleShape,
-                        modifier = Modifier.size(56.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                Icons.Default.Forum,
+                                Icons.Default.Chat,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(30.dp)
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
                         text = "Real-Time Dialogue & Chat Studio",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
 
@@ -464,22 +461,22 @@ fun InteractiveDialogueChatTab(
 
                     Text(
                         text = "আপনার আপলোড করা বড় টেক্সট ডাটাবেজ (যেমন input.txt / ডায়লগ স্ক্রিপ্ট) এর প্রতিটি চরিত্র বা ক্যাটাগরির সাথে সরাসরি চ্যাট করুন। মডেলটি রিয়েল-টাইমে প্রেডিক্ট করে ডায়লগ রেসপন্স দেবে।",
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        lineHeight = 18.sp
+                        lineHeight = 16.sp
                     )
 
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
                         text = "Try a sample dialogue prompt:",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.align(Alignment.Start)
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     val samplePrompts = remember(classes) {
                         val list = mutableListOf<String>()
@@ -500,14 +497,14 @@ fun InteractiveDialogueChatTab(
                     }
 
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         samplePrompts.forEach { prompt ->
                             Surface(
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -515,19 +512,19 @@ fun InteractiveDialogueChatTab(
                                     }
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(10.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
                                         Icons.Default.ChatBubbleOutline,
                                         contentDescription = null,
                                         tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = prompt,
-                                        style = MaterialTheme.typography.bodySmall,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                                         color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
@@ -544,8 +541,8 @@ fun InteractiveDialogueChatTab(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(vertical = 10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
                     items(chatMessages, key = { it.id }) { msg ->
                         ChatMessageItem(
@@ -557,32 +554,26 @@ fun InteractiveDialogueChatTab(
 
                     if (isChatGenerating) {
                         item {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(vertical = 4.dp)
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(14.dp),
-                                            strokeWidth = 2.dp,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = "Model predicting intent & dialogue reply...",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Model predicting intent & dialogue reply...",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
@@ -600,7 +591,7 @@ fun InteractiveDialogueChatTab(
                 list.add("MENENIUS")
                 list.add("All")
             } else {
-                classes.take(4).forEach { list.add(it.className) }
+                classes.take(5).forEach { list.add(it.className) }
             }
             list
         }
@@ -629,8 +620,10 @@ fun InteractiveDialogueChatTab(
 
         // Bottom Input Row
         Surface(
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp,
+            tonalElevation = 4.dp,
+            shadowElevation = 8.dp,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -646,17 +639,20 @@ fun InteractiveDialogueChatTab(
                     modifier = Modifier
                         .weight(1f)
                         .testTag("chat_input_field"),
-                    maxLines = 3,
+                    maxLines = 4,
+                    minLines = 1,
                     shape = RoundedCornerShape(20.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surface,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                     )
                 )
 
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
-                IconButton(
+                FilledIconButton(
                     onClick = {
                         if (chatInputText.isNotBlank()) {
                             onSendMessage(chatInputText)
@@ -664,19 +660,18 @@ fun InteractiveDialogueChatTab(
                     },
                     enabled = chatInputText.isNotBlank() && !isChatGenerating,
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (chatInputText.isNotBlank() && !isChatGenerating) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        )
-                        .testTag("send_chat_btn")
+                        .size(46.dp)
+                        .testTag("send_chat_btn"),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send",
-                        tint = if (chatInputText.isNotBlank() && !isChatGenerating) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                         modifier = Modifier.size(20.dp)
                     )
                 }
