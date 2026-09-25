@@ -1814,4 +1814,62 @@ class ProjectRepository(
             energyMicroJoules = energyUj
         )
     }
+
+    suspend fun importParsedTextDataset(
+        projectId: Long,
+        parseResult: TextDatasetParser.ParseResult,
+        replaceExisting: Boolean = false
+    ): String = withContext(Dispatchers.IO) {
+        if (parseResult.samples.isEmpty()) {
+            return@withContext "No valid samples found to import."
+        }
+
+        if (replaceExisting) {
+            val existing = dao.getClassesForProjectDirect(projectId)
+            existing.forEach { dao.deleteClass(it) }
+        }
+
+        val existingClasses = dao.getClassesForProjectDirect(projectId)
+        val classMap = existingClasses.associateBy { it.className.lowercase(Locale.ROOT) }.toMutableMap()
+
+        var nextColorIdx = existingClasses.size
+
+        for (className in parseResult.classCounts.keys) {
+            val lower = className.lowercase(Locale.ROOT)
+            if (!classMap.containsKey(lower)) {
+                val colorHex = TextDatasetParser.getColorForIndex(nextColorIdx++)
+                val newClassId = dao.insertClass(
+                    ClassificationClassEntity(
+                        projectId = projectId,
+                        className = className,
+                        colorHex = colorHex
+                    )
+                )
+                classMap[lower] = ClassificationClassEntity(
+                    id = newClassId,
+                    projectId = projectId,
+                    className = className,
+                    colorHex = colorHex
+                )
+            }
+        }
+
+        val sampleEntities = parseResult.samples.mapNotNull { parsed ->
+            val classEntity = classMap[parsed.className.lowercase(Locale.ROOT)] ?: return@mapNotNull null
+            val tokenRes = TextModelEngine.tokenize(parsed.text)
+            TextSampleEntity(
+                classId = classEntity.id,
+                projectId = projectId,
+                textContent = parsed.text,
+                tokenCount = tokenRes.tokenCount
+            )
+        }
+
+        if (sampleEntities.isNotEmpty()) {
+            dao.insertTextSamplesBatch(sampleEntities)
+        }
+
+        val summary = parseResult.classCounts.entries.joinToString(", ") { "${it.key}: ${it.value}" }
+        "Successfully imported ${sampleEntities.size} samples across ${parseResult.classCounts.size} classes ($summary)!"
+    }
 }

@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -70,6 +72,7 @@ fun TextDatasetStudio(
     var showAddSampleDialog by remember { mutableStateOf(false) }
     var showMultiLineDialog by remember { mutableStateOf(false) }
     var showBenchmarkDialog by remember { mutableStateOf(false) }
+    var showDatabaseImportDialog by remember { mutableStateOf(false) }
     var showAddClassDialog by remember { mutableStateOf(false) }
     var classToEdit by remember { mutableStateOf<ClassificationClassEntity?>(null) }
     var sampleToEdit by remember { mutableStateOf<TextSampleEntity?>(null) }
@@ -130,13 +133,23 @@ fun TextDatasetStudio(
                 },
                 actions = {
                     FilledTonalButton(
+                        onClick = { showDatabaseImportDialog = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Upload File / DB", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    FilledTonalButton(
                         onClick = { showBenchmarkDialog = true },
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier.height(34.dp)
                     ) {
                         Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Preload Dataset", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Preload", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             )
@@ -250,6 +263,49 @@ fun TextDatasetStudio(
                 }
             }
 
+            // Quick Dataset Upload Banner
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clickable { showDatabaseImportDialog = true }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.CloudUpload,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Import Database / File (input.txt, CSV, JSON)",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Auto-parse Shakespeare plays, drama scripts, transcripts or datasets",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = { showDatabaseImportDialog = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.height(30.dp)
+                    ) {
+                        Text("Upload", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
             // 2. Class Action Bar
             if (selectedClass != null) {
                 Surface(
@@ -310,33 +366,72 @@ fun TextDatasetStudio(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(24.dp),
+                        .padding(20.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    ) {
                         Icon(
                             Icons.Outlined.TextFields,
                             contentDescription = null,
-                            modifier = Modifier.size(56.dp),
+                            modifier = Modifier.size(52.dp),
                             tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = "No samples in '${selectedClass.className}'",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Add training sentences, reviews, or messages to teach the model.",
+                            text = "Have an input.txt file, drama script, or dataset? Upload it directly or add samples manually.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = { showAddSampleDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Add First Text Sample")
+                        Button(
+                            onClick = { showDatabaseImportDialog = true },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Upload Database File (input.txt, CSV, JSON)")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        FilledTonalButton(
+                            onClick = { showDatabaseImportDialog = true },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            Text("🎭", fontSize = 16.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Load Shakespeare Coriolanus Sample")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showAddSampleDialog = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Add Text", fontSize = 12.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { showBenchmarkDialog = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Preload", fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -396,6 +491,18 @@ fun TextDatasetStudio(
                 viewModel.addTextSamplesBatch(selectedClassId!!, lines)
                 showMultiLineDialog = false
                 Toast.makeText(context, "Added ${lines.size} samples", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    if (showDatabaseImportDialog) {
+        TextDatabaseImportDialog(
+            onDismiss = { showDatabaseImportDialog = false },
+            onImportConfirmed = { parseResult, replaceExisting ->
+                viewModel.importParsedTextDataset(parseResult, replaceExisting) { message ->
+                    showDatabaseImportDialog = false
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
             }
         )
     }

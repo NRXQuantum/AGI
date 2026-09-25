@@ -14,6 +14,7 @@ import com.example.ml.ModelArchitecture
 import com.example.ml.OptimizerType
 import com.example.ml.PredictionResult
 import com.example.ml.ProjectTrainingConfig
+import com.example.ml.TextDatasetParser
 import com.example.ml.TextModelEngine
 import com.example.ml.TrainingPhase
 import com.example.ml.TrainingProgress
@@ -335,6 +336,18 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         val pId = _selectedProjectId.value ?: return
         viewModelScope.launch {
             repository.loadBenchmarkDataset(pId, dataset)
+        }
+    }
+
+    fun importParsedTextDataset(
+        parseResult: TextDatasetParser.ParseResult,
+        replaceExisting: Boolean = false,
+        onResult: (String) -> Unit
+    ) {
+        val pId = _selectedProjectId.value ?: return
+        viewModelScope.launch {
+            val result = repository.importParsedTextDataset(pId, parseResult, replaceExisting)
+            onResult(result)
         }
     }
 

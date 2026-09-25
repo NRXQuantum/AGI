@@ -753,6 +753,40 @@ fun CreateProjectDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                if (selectedMode == AppMode.TEXT_CLASSIFICATION) {
+                    Text(
+                        text = "Quick Templates:",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        SuggestionChip(
+                            onClick = {
+                                name = "Shakespeare Dialogue Classifier"
+                                description = "Classifies lines between First Citizen, All, Second Citizen, MENENIUS from input.txt"
+                            },
+                            label = { Text("🎭 Shakespeare input.txt", fontSize = 11.sp) }
+                        )
+                        SuggestionChip(
+                            onClick = {
+                                name = "Sentiment Analyzer"
+                                description = "Classifies user reviews and feedback into Positive vs Negative"
+                            },
+                            label = { Text("Sentiment", fontSize = 11.sp) }
+                        )
+                        SuggestionChip(
+                            onClick = {
+                                name = "Spam Filter"
+                                description = "Identifies spam, phishing, and scam messages"
+                            },
+                            label = { Text("Spam Guard", fontSize = 11.sp) }
+                        )
+                    }
+                }
+
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     shape = RoundedCornerShape(8.dp)
@@ -760,7 +794,7 @@ fun CreateProjectDialog(
                     Text(
                         text = when (selectedMode) {
                             AppMode.FACE_RECOGNITION -> "💡 Creates 'Person A' and 'Person B' by default. Needs 1-3 face photos per person for instant on-device recognition."
-                            AppMode.TEXT_CLASSIFICATION -> "⚡ Ultra-low-energy 3-Expert MoE on-device embeddings with automatic token budgeting. Train custom NLP in seconds!"
+                            AppMode.TEXT_CLASSIFICATION -> "⚡ Supports uploading entire database files (input.txt, CSV, JSON) with multi-character dialogues and automatic token budgeting!"
                             else -> "💡 Creates 'Class A' and 'Class B' by default for multi-class image classification."
                         },
                         style = MaterialTheme.typography.bodySmall,
