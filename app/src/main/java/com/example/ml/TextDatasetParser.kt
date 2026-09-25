@@ -6,28 +6,25 @@ import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.util.Locale
+import java.util.zip.ZipInputStream
 
 /**
- * Universal, Memory-Safe Multi-Format Parser for Text NLP & Large Datasets (500MB+ Safe).
+ * Universal, Memory-Safe Multi-Format & ZIP Parser for Text NLP Projects.
  *
  * Supports:
- * 1. QA / Flashcard / Knowledge Base Formats:
- *    - "question,answer" (e.g. "বাংলাদেশের দীর্ঘতম নদী কোনটি?,মেঘনা")
- *    - "q,a", "query,target", "prompt,response", "input,output"
- * 2. Instruction & LLM Tuning Formats (JSON / JSONL):
- *    - Dolly/Databricks: {"instruction": "...", "context": "...", "response": "...", "category": "..."}
- *    - Alpaca: {"instruction": "...", "input": "...", "output": "..."}
- *    - OpenAI / ChatML: {"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
- * 3. Dialogue / Transcript / Drama Script:
- *    - "First Citizen:\n...\n\nMENENIUS:\n..."
- * 4. Standard Tabular CSV / TSV / Semicolon (Any custom headers & column layouts).
- * 5. Markdown / Section Headers ([Category] / # Category).
- * 6. Memory-Safe Streaming: Line-by-line buffered stream with zero OOM risk for huge files.
+ * 1. ZIP Archives (.zip containing .txt, .csv, .json, .jsonl, .tsv) with on-the-fly decompression.
+ * 2. 28+ Major NLP Benchmark Datasets (Tiny Shakespeare, TinyStories, Alpaca, Dolly 15k, SQuAD 2.0,
+ *    TriviaQA, TyDi QA, WizardLM, UltraChat, DailyDialog, Bangla Alpaca, Bangla DailyDialog, Bangla SQuAD,
+ *    PubMed Cancer NLP, SMS Spam, etc.).
+ * 3. QA / Flashcard / Knowledge Base Formats (question,answer).
+ * 4. LLM Instruction Tuning Formats (Dolly, Alpaca, ChatML JSONL).
+ * 5. Dialogue & Persona scripts.
+ * 6. Memory-Safe line-by-line streaming without heap overflow (500MB+ Safe).
  */
 object TextDatasetParser {
 
     enum class DatasetFormatStrategy(val title: String, val titleBn: String, val description: String) {
-        AUTO_DETECT("Auto-Detect Format", "স্বয়ংক্রিয় সনাক্তকরণ", "Automatically identify CSV, JSONL, QA, or Dialogue formats"),
+        AUTO_DETECT("Auto-Detect Format", "স্বয়ংক্রিয় সনাক্তকরণ", "Automatically identify CSV, JSONL, QA, ZIP or Dialogue formats"),
         QA_QUESTION_ANSWER("Question & Answer (QA)", "প্রশ্ন ও উত্তর (QA)", "Pairs of question and answer (e.g. question,answer CSV)"),
         INSTRUCTION_RESPONSE("Instruction & Response", "ইনস্ট্রাকশন ও রেসপন্স", "LLM Instruction datasets (Dolly, Alpaca, JSONL)"),
         SHAKESPEARE_DIALOGUE("Dialogue & Drama Script", "নাটক ও সংলাপ স্ক্রিপ্ট", "Character dialogues (Speaker: Dialogue transcript)"),
@@ -69,133 +66,16 @@ object TextDatasetParser {
         }
     }
 
-    const val SHAKESPEARE_CORIOLANUS_SAMPLE: String = """First Citizen:
-Before we proceed any further, hear me speak.
-
-All:
-Speak, speak.
-
-First Citizen:
-You are all resolved rather to die than to famish?
-
-All:
-Resolved. resolved.
-
-First Citizen:
-First, you know Caius Marcius is chief enemy to the people.
-
-All:
-We know't, we know't.
-
-First Citizen:
-Let us kill him, and we'll have corn at our own price.
-Is't a verdict?
-
-All:
-No more talking on't; let it be done: away, away!
-
-Second Citizen:
-One word, good citizens.
-
-First Citizen:
-We are accounted poor citizens, the patricians good.
-What authority surfeits on would relieve us: if they
-would yield us but the superfluity, while it were
-wholesome, we might guess they relieved us humanely;
-but they think we are too dear: the leanness that
-afflicts us, the object of our misery, is as an
-inventory to particularise their abundance; our
-sufferance is a gain to them Let us revenge this with
-our pikes, ere we become rakes: for the gods know I
-speak this in hunger for bread, not in thirst for revenge.
-
-Second Citizen:
-Would you proceed especially against Caius Marcius?
-
-All:
-Against him first: he's a very dog to the commonalty.
-
-Second Citizen:
-Consider you what services he has done for his country?
-
-First Citizen:
-Very well; and could be content to give him good
-report fort, but that he pays himself with being proud.
-
-Second Citizen:
-Nay, but speak not maliciously.
-
-First Citizen:
-I say unto you, what he hath done famously, he did
-it to that end: though soft-conscienced men can be
-content to say it was for his country he did it to
-please his mother and to be partly proud; which he
-is, even till the altitude of his virtue.
-
-Second Citizen:
-What he cannot help in his nature, you account a
-vice in him. You must in no way say he is covetous.
-
-First Citizen:
-If I must not, I need not be barren of accusations;
-he hath faults, with surplus, to tire in repetition.
-What shouts are these? The other side o' the city
-is risen: why stay we prating here? to the Capitol!
-
-All:
-Come, come.
-
-First Citizen:
-Soft! who comes here?
-
-Second Citizen:
-Worthy Menenius Agrippa; one that hath always loved
-the people.
-
-First Citizen:
-He's one honest enough: would all the rest were so!
-
-MENENIUS:
-What work's, my countrymen, in hand? where go you
-With bats and clubs? The matter? speak, I pray you.
-
-First Citizen:
-Our business is not unknown to the senate; they have
-had inkling this fortnight what we intend to do,
-which now we'll show 'em in deeds. They say poor
-suitors have strong breaths: they shall know we
-have strong arms too.
-
-MENENIUS:
-Why, masters, my good friends, mine honest neighbours,
-Will you undo yourselves?
-
-First Citizen:
-We cannot, sir, we are undone already.
-
-MENENIUS:
-I tell you, friends, most charitable care
-Have the patricians of you. For your wants,
-Your suffering in this dearth, you may as well
-Strike at the heaven with your staves as lift them"""
-
-    const val BANGLADESH_GK_QA_SAMPLE: String = """question,answer
-বাংলাদেশের দীর্ঘতম নদী কোনটি?,মেঘনা
-বাংলাদেশে স্থানীয় সরকার ব্যবস্থা দুর্বল হওয়ার পেছনে সবচেয়ে বড় প্রাতিষ্ঠানিক দ্বন্দ্ব কোনটি?,উপজেলা ও ইউনিয়ন পরিষদের মধ্যে দ্বৈত প্রশাসনিক কর্তৃত্ব
-কোন সংস্থা বাংলাদেশের GDP হিসাব করে?,বাংলাদেশ পরিসংখ্যান ব্যুরো
-পদ্মা ও যমুনা নদীর শাখা কোনগুলো?,গড়াই ও ধলেশ্বরী
-বাংলাদেশের সংবিধানে মৌলিক অধিকার সংক্রান্ত অনুচ্ছেদ কতটি?,১৮টি অনুচ্ছেদ
-বাংলাদেশের জাতীয় সংসদের প্রথম স্পিকার কে ছিলেন?,মোহাম্মদ উল্লাহ
-মুজিবনগর সরকার শপথ গ্রহণ করে কত তারিখে?,১৭ এপ্রিল ১৯৭১
-বাংলাদেশের সবচেয়ে বড় স্থলবন্দর কোনটি?,বেনাপোল স্থলবন্দর
-সুন্দরবনকে বিশ্ব ঐতিহ্য হিসেবে ঘোষণা করে কোন সংস্থা?,ইউনেস্কো (UNESCO)
-বাংলাদেশের প্রথম ডিজিটাল জেলা কোনটি?,যশোর"""
-
-    const val INSTRUCTION_JSONL_SAMPLE: String = """{"instruction": "When did Virgin Australia start operating?", "context": "Virgin Australia commenced services on 31 August 2000 as Virgin Blue, with two aircraft on a single route.", "response": "Virgin Australia commenced services on 31 August 2000 as Virgin Blue.", "category": "closed_qa"}
-{"instruction": "Which is a species of fish? Tope or Rope", "context": "", "response": "Tope is a species of houndshark fish.", "category": "classification"}
-{"instruction": "Why can camels survive for long without water?", "context": "", "response": "Camels use the fat in their humps to store energy and minimize water loss.", "category": "open_qa"}
-{"instruction": "What is the capital city of France?", "context": "", "response": "The capital of France is Paris.", "category": "general_knowledge"}
-{"instruction": "Identify the intent: I want to cancel my monthly plan", "context": "", "response": "Cancellation Request", "category": "customer_support"}"""
+    data class BenchmarkDatasetInfo(
+        val id: String,
+        val name: String,
+        val nameBn: String,
+        val category: String, // "Literature & Stories", "Instruction & LLM", "QA & Knowledge", "Dialogue & Chat", "Bangla NLP", "Specialized"
+        val format: String,
+        val defaultStrategy: DatasetFormatStrategy,
+        val description: String,
+        val sampleSnippet: String
+    )
 
     private val CLASS_PALETTE = listOf(
         "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
@@ -213,11 +93,67 @@ Strike at the heaven with your staves as lift them"""
     fun parseStream(
         inputStream: InputStream,
         strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
-        maxSampleCap: Int = 30_000,
+        maxSampleCap: Int = 40_000,
         onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)? = null
     ): ParseResult {
         val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8), 32 * 1024)
         return parseBufferedReader(reader, strategy, maxSampleCap, onProgress)
+    }
+
+    /**
+     * Parse compressed ZIP Archive (.zip) containing text, csv, json, jsonl, or tsv files.
+     */
+    fun parseZipStream(
+        inputStream: InputStream,
+        strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
+        maxSampleCap: Int = 40_000,
+        onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)? = null
+    ): ParseResult {
+        val zipStream = ZipInputStream(inputStream)
+        val combinedSamples = mutableListOf<ParsedSample>()
+        var totalLines = 0L
+        var firstValidFormat = "ZIP Archive"
+
+        try {
+            var entry = zipStream.nextEntry
+            while (entry != null) {
+                val entryName = entry.name
+                if (!entry.isDirectory) {
+                    val lower = entryName.lowercase(Locale.ROOT)
+                    if (lower.endsWith(".txt") || lower.endsWith(".csv") || lower.endsWith(".json") || lower.endsWith(".jsonl") || lower.endsWith(".tsv")) {
+                        val nonClosingStream = NonClosingInputStream(zipStream)
+                        val reader = BufferedReader(InputStreamReader(nonClosingStream, Charsets.UTF_8), 32 * 1024)
+                        val subResult = parseBufferedReader(reader, strategy, maxSampleCap - combinedSamples.size, onProgress)
+                        if (subResult.samples.isNotEmpty()) {
+                            combinedSamples.addAll(subResult.samples)
+                            totalLines += subResult.totalLinesScanned
+                            firstValidFormat = "📦 ZIP Archive ($entryName • ${subResult.formatName})"
+                            if (combinedSamples.size >= maxSampleCap) break
+                        }
+                    }
+                }
+                zipStream.closeEntry()
+                entry = zipStream.nextEntry
+            }
+        } catch (_: Exception) {}
+
+        if (combinedSamples.isEmpty()) {
+            return ParseResult(
+                formatName = "ZIP Archive",
+                samples = emptyList(),
+                classCounts = emptyMap(),
+                errorMessage = "No readable .txt, .csv, .json, or .jsonl files found inside the ZIP archive."
+            )
+        }
+
+        val counts = combinedSamples.groupingBy { it.className }.eachCount()
+        return ParseResult(
+            formatName = firstValidFormat,
+            samples = combinedSamples,
+            classCounts = counts,
+            totalLinesScanned = totalLines,
+            isCapped = combinedSamples.size >= maxSampleCap
+        )
     }
 
     /**
@@ -226,7 +162,7 @@ Strike at the heaven with your staves as lift them"""
     fun parse(
         rawContent: String,
         strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
-        maxSampleCap: Int = 30_000
+        maxSampleCap: Int = 40_000
     ): ParseResult {
         val trimmed = rawContent.trim()
         if (trimmed.isBlank()) {
@@ -247,7 +183,6 @@ Strike at the heaven with your staves as lift them"""
         maxSampleCap: Int,
         onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)?
     ): ParseResult {
-        // Read first 50 lines to inspect format
         reader.mark(64 * 1024)
         val previewLines = mutableListOf<String>()
         var lineCount = 0
@@ -269,7 +204,6 @@ Strike at the heaven with your staves as lift them"""
             )
         }
 
-        // Determine effective strategy
         val effectiveStrategy = if (strategy == DatasetFormatStrategy.AUTO_DETECT) {
             detectBestStrategy(previewLines)
         } else {
@@ -289,7 +223,7 @@ Strike at the heaven with your staves as lift them"""
         val firstLine = previewLines.first().trim()
 
         // 1. JSON / JSONL
-        if (firstLine.startsWith("{") && (firstLine.contains("\"instruction\"") || firstLine.contains("\"category\"") || firstLine.contains("\"label\"") || firstLine.contains("\"text\""))) {
+        if (firstLine.startsWith("{") && (firstLine.contains("\"instruction\"") || firstLine.contains("\"category\"") || firstLine.contains("\"label\"") || firstLine.contains("\"text\"") || firstLine.contains("\"response\""))) {
             return DatasetFormatStrategy.INSTRUCTION_RESPONSE
         }
         if (firstLine.startsWith("[") && firstLine.contains("{")) {
@@ -327,9 +261,6 @@ Strike at the heaven with your staves as lift them"""
         return DatasetFormatStrategy.SHAKESPEARE_DIALOGUE
     }
 
-    /**
-     * Parse Question-Answer CSV / TSV format
-     */
     private fun parseQaCsvStream(
         reader: BufferedReader,
         maxSampleCap: Int,
@@ -343,9 +274,9 @@ Strike at the heaven with your staves as lift them"""
         lineNum++
         if (headerLine.contains("\t")) delimiter = '\t' else if (headerLine.contains(";")) delimiter = ';'
 
-        val headerCols = splitCsvLine(headerLine, delimiter).map { it.lowercase(Locale.ROOT) }
-        var questionCol = headerCols.indexOfFirst { it in listOf("question", "q", "prompt", "query", "input", "instruction") }
-        var answerCol = headerCols.indexOfFirst { it in listOf("answer", "a", "response", "target", "output", "completion") }
+        val headerCols = splitCsvLine(headerLine, delimiter).map { it.lowercase(Locale.ROOT).trim() }
+        var questionCol = headerCols.indexOfFirst { it in listOf("question", "q", "prompt", "query", "input", "instruction", "premise", "প্রশ্ন", "জিজ্ঞাসা", "প্রশ্নাবলী") }
+        var answerCol = headerCols.indexOfFirst { it in listOf("answer", "a", "response", "target", "output", "completion", "hypothesis", "label", "উত্তর", "সমাধান", "ফলাফল") }
 
         if (questionCol == -1 || answerCol == -1) {
             questionCol = 0
@@ -386,9 +317,6 @@ Strike at the heaven with your staves as lift them"""
         )
     }
 
-    /**
-     * Parse Instruction Tuning JSON / JSONL (Dolly, Alpaca, ChatML, Databricks)
-     */
     private fun parseJsonlStream(
         reader: BufferedReader,
         maxSampleCap: Int,
@@ -403,27 +331,33 @@ Strike at the heaven with your staves as lift them"""
             val l = line?.trim() ?: continue
             if (l.isEmpty()) continue
 
-            // JSON Array support
+            // 1. JSON Array of objects (e.g. Alpaca / Dolly JSON array)
             if (l.startsWith("[") && l.endsWith("]")) {
                 try {
                     val arr = JSONArray(l)
                     for (i in 0 until arr.length()) {
                         val item = arr.optJSONObject(i) ?: continue
-                        extractSampleFromJson(item)?.let {
-                            samples.add(it)
-                            if (samples.size >= maxSampleCap) break
+                        extractSamplesFromJson(item).forEach { sample ->
+                            samples.add(sample)
+                            if (samples.size >= maxSampleCap) return buildJsonResult(samples, lineNum, maxSampleCap)
                         }
                     }
                 } catch (_: Exception) {}
                 continue
             }
 
-            if (l.startsWith("{") && l.endsWith("}")) {
+            // 2. Single line JSON (JSONL) or root JSON object
+            if (l.startsWith("{")) {
                 try {
                     val obj = JSONObject(l)
-                    extractSampleFromJson(obj)?.let {
-                        samples.add(it)
-                        if (samples.size >= maxSampleCap) break
+                    // Check if SQuAD format with "data" array
+                    if (obj.has("data") && obj.optJSONArray("data") != null) {
+                        extractSquadSamples(obj.getJSONArray("data"), samples, maxSampleCap)
+                    } else {
+                        extractSamplesFromJson(obj).forEach { sample ->
+                            samples.add(sample)
+                            if (samples.size >= maxSampleCap) return buildJsonResult(samples, lineNum, maxSampleCap)
+                        }
                     }
                 } catch (_: Exception) {}
             }
@@ -434,9 +368,13 @@ Strike at the heaven with your staves as lift them"""
         }
 
         if (samples.isEmpty()) return emptyResult("JSON / JSONL")
+        return buildJsonResult(samples, lineNum, maxSampleCap)
+    }
+
+    private fun buildJsonResult(samples: List<ParsedSample>, lineNum: Long, maxSampleCap: Int): ParseResult {
         val counts = samples.groupingBy { it.className }.eachCount()
         return ParseResult(
-            formatName = "🤖 LLM Instruction Dataset (JSONL / Dolly / Alpaca)",
+            formatName = "🤖 LLM Instruction & QA Dataset (JSONL / SQuAD / Alpaca / UltraChat)",
             samples = samples,
             classCounts = counts,
             totalLinesScanned = lineNum,
@@ -444,11 +382,84 @@ Strike at the heaven with your staves as lift them"""
         )
     }
 
-    private fun extractSampleFromJson(obj: JSONObject): ParsedSample? {
-        // Priority 1: Dolly format (category + instruction + response)
-        val category = obj.optString("category", "").trim()
-        val instruction = obj.optString("instruction", "").trim()
-        val response = obj.optString("response", "").ifEmpty { obj.optString("output", "") }.trim()
+    private fun extractSquadSamples(dataArray: JSONArray, outSamples: MutableList<ParsedSample>, maxSampleCap: Int) {
+        for (i in 0 until dataArray.length()) {
+            val topicObj = dataArray.optJSONObject(i) ?: continue
+            val title = topicObj.optString("title", "SQuAD").ifEmpty { "SQuAD QA" }
+            val paragraphs = topicObj.optJSONArray("paragraphs") ?: continue
+            for (p in 0 until paragraphs.length()) {
+                val pObj = paragraphs.optJSONObject(p) ?: continue
+                val qas = pObj.optJSONArray("qas") ?: continue
+                for (q in 0 until qas.length()) {
+                    val qaObj = qas.optJSONObject(q) ?: continue
+                    val question = qaObj.optString("question", "").trim()
+                    var answerText = ""
+                    val answersArr = qaObj.optJSONArray("answers")
+                    if (answersArr != null && answersArr.length() > 0) {
+                        answerText = answersArr.optJSONObject(0)?.optString("text", "") ?: ""
+                    }
+                    if (answerText.isEmpty()) {
+                        answerText = qaObj.optString("answer", "")
+                    }
+                    if (question.isNotEmpty()) {
+                        val label = sanitizeClassName(if (answerText.isNotBlank()) answerText.take(35) else title)
+                        outSamples.add(ParsedSample(label, if (answerText.isNotBlank()) "$question\nAnswer: $answerText" else question))
+                        if (outSamples.size >= maxSampleCap) return
+                    }
+                }
+            }
+        }
+    }
+
+    private fun extractSamplesFromJson(obj: JSONObject): List<ParsedSample> {
+        val results = mutableListOf<ParsedSample>()
+
+        // Multi-Turn Conversations (UltraChat, ShareGPT)
+        if (obj.has("conversations")) {
+            val convs = obj.optJSONArray("conversations")
+            if (convs != null && convs.length() >= 2) {
+                var humanMsg = ""
+                for (i in 0 until convs.length()) {
+                    val turn = convs.optJSONObject(i) ?: continue
+                    val from = turn.optString("from", "").lowercase(Locale.ROOT)
+                    val value = turn.optString("value", "").trim()
+                    if (from in listOf("human", "user", "prompter")) {
+                        humanMsg = value
+                    } else if (from in listOf("gpt", "assistant", "bot") && humanMsg.isNotEmpty()) {
+                        val label = sanitizeClassName(humanMsg.take(30))
+                        results.add(ParsedSample(label, "$humanMsg\n$value"))
+                        humanMsg = ""
+                    }
+                }
+                if (results.isNotEmpty()) return results
+            }
+        }
+
+        // Multi-Turn Messages (OpenAssistant, ChatML)
+        if (obj.has("messages")) {
+            val msgs = obj.optJSONArray("messages")
+            if (msgs != null && msgs.length() >= 2) {
+                var userMsg = ""
+                for (i in 0 until msgs.length()) {
+                    val turn = msgs.optJSONObject(i) ?: continue
+                    val role = turn.optString("role", "").lowercase(Locale.ROOT)
+                    val content = turn.optString("content", "").trim()
+                    if (role in listOf("user", "human")) {
+                        userMsg = content
+                    } else if (role in listOf("assistant", "bot") && userMsg.isNotEmpty()) {
+                        val label = sanitizeClassName(userMsg.take(30))
+                        results.add(ParsedSample(label, "$userMsg\n$content"))
+                        userMsg = ""
+                    }
+                }
+                if (results.isNotEmpty()) return results
+            }
+        }
+
+        // Single Sample Object
+        val category = obj.optString("category", "").ifEmpty { obj.optString("topic", "") }.trim()
+        val instruction = obj.optString("instruction", "").ifEmpty { obj.optString("question", "") }.ifEmpty { obj.optString("prompt", "") }.trim()
+        val response = obj.optString("response", "").ifEmpty { obj.optString("output", "") }.ifEmpty { obj.optString("answer", "") }.trim()
         val context = obj.optString("context", "").trim()
 
         if (category.isNotEmpty()) {
@@ -458,34 +469,32 @@ Strike at the heaven with your staves as lift them"""
                 if (response.isNotEmpty()) append(response)
             }.trim()
             if (content.isNotEmpty()) {
-                return ParsedSample(sanitizeClassName(category), content)
+                results.add(ParsedSample(sanitizeClassName(category), content))
+                return results
             }
         }
 
-        // Priority 2: Standard label + text
-        val labelKey = listOf("label", "class", "category", "target", "sentiment", "speaker", "tag", "intent").firstOrNull { obj.has(it) }
+        val labelKey = listOf("label", "class", "category", "target", "sentiment", "speaker", "tag", "intent", "topic").firstOrNull { obj.has(it) }
         val textKey = listOf("text", "content", "sentence", "message", "utterance", "review", "line", "body", "input").firstOrNull { obj.has(it) }
         if (labelKey != null && textKey != null) {
             val label = sanitizeClassName(obj.optString(labelKey, ""))
             val content = obj.optString(textKey, "").trim()
             if (label.isNotEmpty() && content.isNotEmpty()) {
-                return ParsedSample(label, content)
+                results.add(ParsedSample(label, content))
+                return results
             }
         }
 
-        // Priority 3: Alpaca format without category (instruction -> label, output -> text)
         if (instruction.isNotEmpty() && response.isNotEmpty()) {
             val label = sanitizeClassName(instruction.take(30))
-            val content = if (obj.optString("input", "").isNotEmpty()) "${obj.optString("input")}\n$response" else response
-            return ParsedSample(label, content)
+            val content = if (obj.optString("input", "").isNotEmpty()) "${obj.optString("input")}\n$response" else "$instruction\n$response"
+            results.add(ParsedSample(label, content))
+            return results
         }
 
-        return null
+        return results
     }
 
-    /**
-     * Parse Dialogue / Transcript Format (e.g. Shakespeare "First Citizen:\n...")
-     */
     private fun parseDialogueStream(
         reader: BufferedReader,
         maxSampleCap: Int,
@@ -553,9 +562,6 @@ Strike at the heaven with your staves as lift them"""
         )
     }
 
-    /**
-     * Generic CSV / TSV Parser
-     */
     private fun parseGenericCsvStream(
         reader: BufferedReader,
         maxSampleCap: Int,
@@ -574,11 +580,11 @@ Strike at the heaven with your staves as lift them"""
 
         if (firstCols.size >= 2) {
             for ((idx, col) in firstCols.withIndex()) {
-                val lower = col.lowercase(Locale.ROOT)
-                if (lower in listOf("label", "class", "category", "target", "sentiment", "speaker", "intent", "tag", "topic", "answer")) {
+                val lower = col.lowercase(Locale.ROOT).trim()
+                if (lower in listOf("label", "class", "category", "target", "sentiment", "speaker", "intent", "tag", "topic", "answer", "লেবেল", "ক্যাটাগরি", "উত্তর", "বিষয়", "টপিক", "শ্রেণী")) {
                     labelCol = idx
                 }
-                if (lower in listOf("text", "content", "sentence", "message", "utterance", "review", "line", "question", "prompt", "input", "body")) {
+                if (lower in listOf("text", "content", "sentence", "message", "utterance", "review", "line", "question", "prompt", "input", "body", "টেক্সট", "প্রশ্ন", "মন্তব্য", "বার্তা", "বাক্য", "অনুচ্ছেদ", "বিবরণ")) {
                     textCol = idx
                 }
             }
@@ -594,7 +600,6 @@ Strike at the heaven with your staves as lift them"""
                     labelCol = 1
                     textCol = 0
                 }
-                // Include first line as sample since it wasn't header
                 val l = sanitizeClassName(firstCols[labelCol])
                 val t = firstCols[textCol].trim()
                 if (l.isNotEmpty() && t.isNotEmpty()) {
@@ -635,9 +640,6 @@ Strike at the heaven with your staves as lift them"""
         )
     }
 
-    /**
-     * Section Headers Parser ([Category] / # Category)
-     */
     private fun parseSectionHeadersStream(
         reader: BufferedReader,
         maxSampleCap: Int,
@@ -719,4 +721,310 @@ Strike at the heaven with your staves as lift them"""
             .take(35)
             .ifEmpty { "Class" }
     }
+
+    /**
+     * Non-closing InputStream wrapper so ZipInputStream isn't closed when BufferedReader closes.
+     */
+    private class NonClosingInputStream(private val stream: InputStream) : InputStream() {
+        override fun read(): Int = stream.read()
+        override fun read(b: ByteArray, off: Int, len: Int): Int = stream.read(b, off, len)
+        override fun close() { /* Don't close outer ZipInputStream */ }
+    }
+
+    /**
+     * 28+ Global & Bangla NLP Benchmark Datasets Catalog
+     */
+    val BENCHMARK_CATALOG: List<BenchmarkDatasetInfo> = listOf(
+        // Literature & Drama
+        BenchmarkDatasetInfo(
+            id = "tiny_shakespeare",
+            name = "Tiny Shakespeare",
+            nameBn = "টাইনি শেক্সপিয়র",
+            category = "Literature & Drama",
+            format = "Drama Dialogues (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SHAKESPEARE_DIALOGUE,
+            description = "Complete dialogue transcripts of Shakespeare plays (Coriolanus, Julius Caesar, Hamlet) categorized by speaker roles.",
+            sampleSnippet = "First Citizen:\nYou are all resolved rather to die than to famish?\n\nMENENIUS:\nWhat work's, my countrymen, in hand?"
+        ),
+        BenchmarkDatasetInfo(
+            id = "tinystories",
+            name = "TinyStories",
+            nameBn = "টাইনি স্টোরিজ",
+            category = "Literature & Drama",
+            format = "Synthesized Story Chunks (.txt / .jsonl)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "Synthetic short stories with simple vocabulary for foundational neural reasoning and coherence modeling.",
+            sampleSnippet = "[Chapter 1: The Magic Tree]\nOnce upon a time there was a small girl named Lily. She loved to play under the big oak tree."
+        ),
+        BenchmarkDatasetInfo(
+            id = "wikitext103",
+            name = "WikiText-103",
+            nameBn = "উইকিটেক্সট-১০৩",
+            category = "Literature & Drama",
+            format = "Articles with Section Headers (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "100M+ tokens extracted from verified Wikipedia Good & Featured articles structured by header sections.",
+            sampleSnippet = "= Valkyria Chronicles III =\nSenjō no Valkyria 3 is a tactical role-playing video game developed by Sega for PlayStation Portable."
+        ),
+        BenchmarkDatasetInfo(
+            id = "llm_lab_corpus",
+            name = "llm-lab-corpus",
+            nameBn = "এলএলএম ল্যাব করপাস",
+            category = "Literature & Drama",
+            format = "Pretraining Domain Chunks (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "Curated multi-domain research corpus for lightweight on-device language modeling experiments.",
+            sampleSnippet = "[Neural Architecture]\nMixture-of-Experts enables sparse activation of specialized feedforward layers on mobile CPUs."
+        ),
+
+        // LLM Instruction Tuning
+        BenchmarkDatasetInfo(
+            id = "alpaca",
+            name = "Alpaca (Stanford)",
+            nameBn = "স্ট্যানফোর্ড আলপাকা",
+            category = "Instruction & LLM",
+            format = "JSONL (instruction, input, output)",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "52,000 instruction-following demonstrations generated by OpenAI text-davinci-003 for alignment.",
+            sampleSnippet = "{\"instruction\": \"Give three tips for staying healthy.\", \"input\": \"\", \"output\": \"1. Eat a balanced diet.\\n2. Exercise regularly.\\n3. Get enough sleep.\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "dolly15k",
+            name = "Dolly 15k (Databricks)",
+            nameBn = "ডলি ১৫কে (ডেটাব্রিক্স)",
+            category = "Instruction & LLM",
+            format = "JSONL (instruction, response, category)",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "15,000 high-quality human-generated prompt-response pairs categorized into 8 distinct task types.",
+            sampleSnippet = "{\"instruction\": \"When did Virgin Australia start?\", \"category\": \"closed_qa\", \"response\": \"Virgin Australia commenced services on 31 August 2000.\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "wizardlm70k",
+            name = "WizardLM 70k",
+            nameBn = "উইজার্ডএলএম ৭০কে",
+            category = "Instruction & LLM",
+            format = "Complex Evol-Instruct JSONL",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "Evol-Instruct dataset with complex multi-step reasoning, constraints, and deep explanations.",
+            sampleSnippet = "{\"instruction\": \"Explain quantum superposition with a practical analogy.\", \"category\": \"reasoning\", \"output\": \"Imagine a spinning coin...\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "lima",
+            name = "LIMA (Less Is More)",
+            nameBn = "লিমা (মেটা এলএলএম)",
+            category = "Instruction & LLM",
+            format = "High-Quality Alignment JSONL",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "1,000 carefully curated instruction pairs showing that a small set of high-quality examples yields strong alignment.",
+            sampleSnippet = "{\"instruction\": \"How do I write a formal resignation letter?\", \"category\": \"writing\", \"output\": \"Dear [Manager], Please accept this letter as formal notification...\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "openassistant",
+            name = "OpenAssistant",
+            nameBn = "ওপেনঅ্যাসিস্ট্যান্ট",
+            category = "Instruction & LLM",
+            format = "Crowdsourced Conversation JSONL",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "Human-generated, human-annotated conversation trees across multiple languages for assistant training.",
+            sampleSnippet = "{\"instruction\": \"What are the differences between TCP and UDP?\", \"category\": \"networking\", \"output\": \"TCP is connection-oriented and reliable, while UDP is connectionless.\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "ultrachat200k",
+            name = "UltraChat 200k",
+            nameBn = "আল্ট্রাচ্যাট ২০০কে",
+            category = "Instruction & LLM",
+            format = "Multi-turn Dialogue JSONL",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "Comprehensive multi-turn multi-topic dialog dataset covering complex reasoning and knowledge.",
+            sampleSnippet = "{\"instruction\": \"Can you summarize the plot of Interstellar?\", \"category\": \"entertainment\", \"output\": \"A team of astronauts travel through a wormhole...\"}"
+        ),
+
+        // QA & Knowledge Base
+        BenchmarkDatasetInfo(
+            id = "squad2",
+            name = "SQuAD 2.0",
+            nameBn = "স্কোয়াড ২.০ (স্ট্যানফোর্ড)",
+            category = "QA & Knowledge",
+            format = "Reading Comprehension JSON / CSV",
+            defaultStrategy = DatasetFormatStrategy.QA_QUESTION_ANSWER,
+            description = "Stanford Question Answering Dataset with 100,000+ questions on Wikipedia articles and unanswerable questions.",
+            sampleSnippet = "question,answer\nWhat causes the greenhouse effect?,Atmospheric greenhouse gases trapping heat\nWhen was NASA established?,July 29 1958"
+        ),
+        BenchmarkDatasetInfo(
+            id = "triviaqa",
+            name = "TriviaQA",
+            nameBn = "ট্রিভিয়া কিউএ",
+            category = "QA & Knowledge",
+            format = "Question-Answer Pairs (.csv / .jsonl)",
+            defaultStrategy = DatasetFormatStrategy.QA_QUESTION_ANSWER,
+            description = "Large-scale reading comprehension dataset containing 650K question-answer-evidence triples.",
+            sampleSnippet = "question,answer\nWhich planet is known as the Red Planet?,Mars\nWho wrote Romeo and Juliet?,William Shakespeare"
+        ),
+        BenchmarkDatasetInfo(
+            id = "tydiqa",
+            name = "TyDi QA (Google)",
+            nameBn = "টাইডি কিউএ (গুগল)",
+            category = "QA & Knowledge",
+            format = "Multilingual Diverse QA (.jsonl)",
+            defaultStrategy = DatasetFormatStrategy.QA_QUESTION_ANSWER,
+            description = "Google's benchmark across 11 typologically diverse languages including Bengali, Arabic, and Russian.",
+            sampleSnippet = "question,answer\nWhat is the speed of light in vacuum?,299792458 meters per second\nWho discovered penicillin?,Alexander Fleming"
+        ),
+        BenchmarkDatasetInfo(
+            id = "bangladesh_gk",
+            name = "Bangladesh GK QA",
+            nameBn = "বাংলাদেশ সাধারণ জ্ঞান ও প্রশ্ন-উত্তর",
+            category = "QA & Knowledge",
+            format = "question,answer CSV",
+            defaultStrategy = DatasetFormatStrategy.QA_QUESTION_ANSWER,
+            description = "বাংলাদেশের সংবিধান, ভূগোল, নদী, ইতিহাস ও সাধারণ জ্ঞানভিত্তিক প্রশ্ন-উত্তর ডাটাবেজ।",
+            sampleSnippet = "question,answer\nবাংলাদেশের দীর্ঘতম নদী কোনটি?,মেঘনা\nকোন সংস্থা GDP হিসাব করে?,বাংলাদেশ পরিসংখ্যান ব্যুরো"
+        ),
+
+        // Multi-Turn Dialogue & Chat
+        BenchmarkDatasetInfo(
+            id = "dailydialog",
+            name = "DailyDialog",
+            nameBn = "ডেইলি ডায়লগ",
+            category = "Dialogue & Chat",
+            format = "Multi-Turn Dialogue (.txt / .jsonl)",
+            defaultStrategy = DatasetFormatStrategy.SHAKESPEARE_DIALOGUE,
+            description = "High-quality human dialogues reflecting everyday communication topics (shopping, travel, work).",
+            sampleSnippet = "Person A:\nCould you help me find the nearest subway station?\n\nPerson B:\nSure, walk two blocks north and turn left."
+        ),
+        BenchmarkDatasetInfo(
+            id = "persona_chat",
+            name = "Persona-Chat",
+            nameBn = "পারসোনা চ্যাট",
+            category = "Dialogue & Chat",
+            format = "Persona Profile Dialogues (.jsonl)",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "Dialogues where each participant is assigned a specific persona profile (hobbies, profession, location).",
+            sampleSnippet = "{\"instruction\": \"Persona: I am an artist who loves hiking. Speak with me!\", \"category\": \"persona_dialog\", \"output\": \"Hello! I just finished painting a mountain landscape.\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "everyday_conversations",
+            name = "Everyday Conversations",
+            nameBn = "এভরিডে কনভার্সেশনস",
+            category = "Dialogue & Chat",
+            format = "Chat Turns (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SHAKESPEARE_DIALOGUE,
+            description = "Natural casual conversation dataset for training responsive conversational intent agents.",
+            sampleSnippet = "User:\nWhat is the weather like today?\n\nAssistant:\nIt is bright and sunny with a gentle breeze."
+        ),
+
+        // Bangla NLP Benchmarks
+        BenchmarkDatasetInfo(
+            id = "bangla_dailydialog",
+            name = "Bangla DailyDialog",
+            nameBn = "বাংলা ডেইলি ডায়লগ",
+            category = "Bangla NLP",
+            format = "বাংলা সংলাপ ও কথোপকথন (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SHAKESPEARE_DIALOGUE,
+            description = "দৈনন্দিন সাধারণ বাংলা কথোপকথন, সম্ভাষণ ও প্রশ্ন-উত্তর ভিত্তিক সংলাপ করপাস।",
+            sampleSnippet = "প্রথম ব্যক্তি:\nকেমন আছেন? আজকের আবহাওয়াটা বেশ চমৎকার!\n\nদ্বিতীয় ব্যক্তি:\nজি আলহামদুলিল্লাহ ভালো। চলুন একটু ঘুরে আসি।"
+        ),
+        BenchmarkDatasetInfo(
+            id = "bangla_squad",
+            name = "Bangla SQuAD",
+            nameBn = "বাংলা স্কোয়াড (প্রশ্ন-উত্তর)",
+            category = "Bangla NLP",
+            format = "বাংলা রিডিং কমপ্রিহেনশন (.csv / .jsonl)",
+            defaultStrategy = DatasetFormatStrategy.QA_QUESTION_ANSWER,
+            description = "বাংলা উইকিপিডিয়া ও বিভিন্ন আর্টিকেল থেকে তৈরি প্রশ্ন ও উত্তরের সমৃদ্ধ ডাটাবেজ।",
+            sampleSnippet = "question,answer\nপদ্মা ও যমুনা নদীর শাখা কোনগুলো?,গড়াই ও ধলেশ্বরী\nমুজিবনগর সরকার শপথ গ্রহণ করে কবে?,১৭ এপ্রিল ১৯৭১"
+        ),
+        BenchmarkDatasetInfo(
+            id = "bangla_alpaca",
+            name = "Bangla Alpaca",
+            nameBn = "বাংলা আলপাকা",
+            category = "Bangla NLP",
+            format = "বাংলা ইনস্ট্রাকশন টিউনিং JSONL",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "বাংলা ভাষায় অনূদিত ও কিউরেট করা ৫২,০০০ ইনস্ট্রাকশন-ফলোয়িং ডেমোনস্ট্রেশন।",
+            sampleSnippet = "{\"instruction\": \"স্বাস্থ্য সুরক্ষায় ৩টি গুরুত্বপূর্ণ পরামর্শ দিন।\", \"category\": \"health\", \"output\": \"১. সুষম খাবার খান।\\n২. নিয়মিত ব্যায়াম করুন।\\n৩. পর্যাপ্ত ঘুমান।\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "bangla_instruction_100k",
+            name = "Bangla Instruction Tuning 100K",
+            nameBn = "বাংলা ইনস্ট্রাকশন টিউনিং ১০০কে",
+            category = "Bangla NLP",
+            format = "১০০কে বাংলা ইনস্ট্রাকশন JSONL",
+            defaultStrategy = DatasetFormatStrategy.INSTRUCTION_RESPONSE,
+            description = "১,০০,০০০ বাংলা ইনস্ট্রাকশন ও রেসপন্স জোড়া বিশিষ্ট বৃহৎ লার্জ ল্যাঙ্গুয়েজ মডেল করপাস।",
+            sampleSnippet = "{\"instruction\": \"বাংলাদেশের সংবিধানের মূলনীতি কয়টি ও কি কি?\", \"category\": \"constitution\", \"output\": \"মূলনীতি ৪টি: জাতীয়তাবাদ, সমাজতন্ত্র, গণতন্ত্র ও ধর্মনিরপেক্ষতা।\"}"
+        ),
+        BenchmarkDatasetInfo(
+            id = "banglatext",
+            name = "BanglaText",
+            nameBn = "বাংলাটেক্সট করপাস",
+            category = "Bangla NLP",
+            format = "বাংলা খবর ও অনুচ্ছেদ (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "সংবাদপত্র, সাহিত্য ও শিক্ষামূলক বাংলা আর্টিকেলের বৃহৎ ক্যাটাগরিভিত্তিক করপাস।",
+            sampleSnippet = "[জাতীয় সংবাদ]\nঢাকা মেট্রোরেলের নতুন স্টেশন চালু হওয়ায় সাধারণ যাত্রীদের যাতায়াত আরও সহজ হয়েছে।"
+        ),
+        BenchmarkDatasetInfo(
+            id = "bangla_wikipedia",
+            name = "বাংলা উইকিপিডিয়া (Bangla Wikipedia)",
+            nameBn = "বাংলা উইকিপিডিয়া করপাস",
+            category = "Bangla NLP",
+            format = "বিশ্বকোষীয় অনুচ্ছেদ (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "বাংলা উইকিপিডিয়ার সমস্ত নিবন্ধের বিষয়ভিত্তিক প্যারাগ্রাফ ও টপিক ক্লাসিফিকেশন।",
+            sampleSnippet = "[সুন্দরবন]\nসুন্দরবন হলো বঙ্গোপসাগরের উপকূলবর্তী অঞ্চলে অবস্থিত একটি প্রশস্ত লবণাক্ত বনভূমি।"
+        ),
+        BenchmarkDatasetInfo(
+            id = "oscar_bangla",
+            name = "OSCAR (Open Super-large Crawled)",
+            nameBn = "অস্কার করপাস",
+            category = "Bangla NLP",
+            format = "ওয়েব ক্রলড টেক্সট করপাস (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "মাল্টি-টেরাবাইট ওয়েব ক্রল থেকে পরিশোধিত বহুভাষিক ওপেন করপাস।",
+            sampleSnippet = "[প্রযুক্তি ও বিজ্ঞান]\nকৃত্রিম বুদ্ধিমত্তা ও মোবাইল ডিভাইসে অন-ডিভাইস মেশিন লার্নিং এর ব্যবহার দ্রুত বৃদ্ধি পাচ্ছে।"
+        ),
+        BenchmarkDatasetInfo(
+            id = "cc100_bangla",
+            name = "CC-100 (Common Crawl 100)",
+            nameBn = "সিসি-১০০ বাংলা",
+            category = "Bangla NLP",
+            format = "কমন ক্রল টেক্সট ডেটাসেট (.txt)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "১০০টি ভাষার ওপর নির্মিত ফেসবুক এআই-এর বৃহৎ মনোপ্রিট্রেইনিং করপাস।",
+            sampleSnippet = "[শিক্ষা ও সংস্কৃতি]\nমাতৃভাষা শিক্ষায় ডিজিটাল কনটেন্ট তৈরি শিক্ষার্থীদের আগ্রহ বহুলাংশে বাড়িয়ে দেয়।"
+        ),
+        BenchmarkDatasetInfo(
+            id = "bangla2b",
+            name = "Bangla2B",
+            nameBn = "বাংলা ২ বিলিয়ন টোকেন করপাস",
+            category = "Bangla NLP",
+            format = "প্রিট্রেইনিং করপাস (.jsonl / .txt)",
+            defaultStrategy = DatasetFormatStrategy.SECTION_HEADER,
+            description = "বাংলা ভাষায় ২ বিলিয়নের অধিক টোকেন সম্বলিত বৃহৎ প্রিট্রেইনিং টেক্সট করপাস।",
+            sampleSnippet = "[অর্থনীতি ও বাণিজ্য]\nগত অর্থবছরে দেশের রপ্তানি আয়ে তৈরি পোশাক খাতের অবদান ছিল সর্বাধিক।"
+        ),
+
+        // Specialized & Healthcare
+        BenchmarkDatasetInfo(
+            id = "pubmed_cancer_nlp",
+            name = "PubMed Cancer NLP Textual Dataset",
+            nameBn = "পাবমেড ক্যান্সার এনএলপি ডেটাসেট",
+            category = "Specialized",
+            format = "Biomedical Literature CSV / TSV",
+            defaultStrategy = DatasetFormatStrategy.CSV_LABEL_TEXT,
+            description = "Cancer research paper abstracts and clinical trial texts categorized by cancer types (Lung, Breast, Colon, Melanoma).",
+            sampleSnippet = "label,text\nLung Cancer,EGFR mutation analysis was performed in non-small cell lung carcinoma patients to evaluate osimertinib efficacy.\nBreast Cancer,HER2 positive metastatic breast cancer patients demonstrated improved progression-free survival with antibody-drug conjugates."
+        ),
+        BenchmarkDatasetInfo(
+            id = "sms_spam_collection",
+            name = "SMS Spam Collection",
+            nameBn = "এসএমএস স্প্যাম গার্ড ডেটাসেট",
+            category = "Specialized",
+            format = "Label \t Message TSV",
+            defaultStrategy = DatasetFormatStrategy.CSV_LABEL_TEXT,
+            description = "5,574 mobile SMS messages labeled as legitimate Ham or Phishing/Promotional Spam.",
+            sampleSnippet = "label,text\nham,Hey are we still meeting for dinner at 7pm tonight?\nspam,CONGRATULATIONS! You have won a $1000 cash prize! Claim now at http://win.xyz"
+        )
+    )
 }

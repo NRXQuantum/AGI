@@ -43,11 +43,13 @@ import kotlinx.coroutines.withContext
  * Universal, Memory-Safe Database & File Import Dialog for Text NLP Projects.
  *
  * Supports:
- * 1. Uploading input.txt, CSV, TSV, JSON, JSONL files via Android Document Picker (500MB+ Safe).
- * 2. Multi-Format Strategies (QA pairs, Dolly/Alpaca instruction tuning, Shakespeare dialogues, CSV/TSV, Section headers).
- * 3. Preloaded benchmark samples (Shakespeare Coriolanus, Bangladesh GK QA, Dolly JSONL).
- * 4. Streaming line-by-line parser with zero OOM risk and live progress reporting.
- * 5. Interactive class filtering, sample preview, and memory protection badge.
+ * 1. ZIP Archives (.zip directly unpacked & streamed in memory without OOM).
+ * 2. Uploading input.txt, CSV, TSV, JSON, JSONL files via Android Document Picker (500MB+ Safe).
+ * 3. 28+ Major Benchmark Datasets catalog (Tiny Shakespeare, TinyStories, Alpaca, Dolly 15k,
+ *    SQuAD 2.0, TriviaQA, TyDi QA, WizardLM, UltraChat, Bangla DailyDialog, Bangla SQuAD,
+ *    Bangla Alpaca, Bangla2B, PubMed Cancer NLP, SMS Spam, etc.).
+ * 4. Multi-Format Strategies (QA pairs, Dolly/Alpaca instruction tuning, Shakespeare dialogues, CSV/TSV, Section headers).
+ * 5. Streaming line-by-line parser with zero OOM risk and live progress reporting.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,12 +60,13 @@ fun TextDatabaseImportDialog(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var selectedTab by remember { mutableStateOf(0) } // 0: File Upload, 1: Text Paste/Edit, 2: Preloaded Examples
+    var selectedTab by remember { mutableStateOf(0) } // 0: File / ZIP Upload, 1: Paste Text, 2: 28+ Benchmark Catalog
     var selectedStrategy by remember { mutableStateOf(TextDatasetParser.DatasetFormatStrategy.AUTO_DETECT) }
 
     var rawText by remember { mutableStateOf("") }
     var loadedFileName by remember { mutableStateOf<String?>(null) }
     var loadedFileSize by remember { mutableStateOf<String?>(null) }
+    var isZipArchive by remember { mutableStateOf(false) }
 
     var isStreamingParsing by remember { mutableStateOf(false) }
     var streamProgressLines by remember { mutableLongStateOf(0L) }
@@ -76,7 +79,11 @@ fun TextDatabaseImportDialog(
     var excludedClasses by remember { mutableStateOf(setOf<String>()) }
     var isImporting by remember { mutableStateOf(false) }
 
-    // Active parse result (either from streaming file or from text area)
+    // Benchmark Catalog Filter State
+    var catalogCategoryFilter by remember { mutableStateOf("All") }
+    var catalogSearchQuery by remember { mutableStateOf("") }
+
+    // Active parse result (either from streaming file/ZIP or from text area)
     val effectiveBaseResult = remember(streamingParseResult, rawText, selectedStrategy) {
         if (streamingParseResult != null) {
             streamingParseResult
@@ -94,7 +101,7 @@ fun TextDatabaseImportDialog(
             ?.filterBySelectedClasses(effectiveBaseResult.classCounts.keys - excludedClasses)
     }
 
-    // Memory-safe streaming file picker launcher
+    // Memory-safe streaming file picker launcher (.zip, .txt, .csv, .tsv, .json, .jsonl, etc.)
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -121,6 +128,7 @@ fun TextDatabaseImportDialog(
                     }
 
                     loadedFileName = displayName
+                    isZipArchive = displayName.endsWith(".zip", ignoreCase = true)
                     loadedFileSize = when {
                         sizeBytes > 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", sizeBytes / (1024.0 * 1024.0))
                         sizeBytes > 1024 -> "${sizeBytes / 1024} KB"
@@ -130,15 +138,27 @@ fun TextDatabaseImportDialog(
                     // Parse stream in background without allocating full string in RAM
                     val result = withContext(Dispatchers.IO) {
                         contentResolver.openInputStream(uri)?.use { stream ->
-                            TextDatasetParser.parseStream(
-                                inputStream = stream,
-                                strategy = selectedStrategy,
-                                maxSampleCap = 40_000,
-                                onProgress = { lines, samples ->
-                                    streamProgressLines = lines
-                                    streamProgressSamples = samples
-                                }
-                            )
+                            if (isZipArchive) {
+                                TextDatasetParser.parseZipStream(
+                                    inputStream = stream,
+                                    strategy = selectedStrategy,
+                                    maxSampleCap = 40_000,
+                                    onProgress = { lines, samples ->
+                                        streamProgressLines = lines
+                                        streamProgressSamples = samples
+                                    }
+                                )
+                            } else {
+                                TextDatasetParser.parseStream(
+                                    inputStream = stream,
+                                    strategy = selectedStrategy,
+                                    maxSampleCap = 40_000,
+                                    onProgress = { lines, samples ->
+                                        streamProgressLines = lines
+                                        streamProgressSamples = samples
+                                    }
+                                )
+                            }
                         }
                     }
 
@@ -169,7 +189,7 @@ fun TextDatabaseImportDialog(
         Surface(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
+                .padding(10.dp),
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp
@@ -207,7 +227,7 @@ fun TextDatabaseImportDialog(
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "Multi-Format • Memory-Safe Stream • QA / JSONL / TXT",
+                                text = "ZIP / 500MB Stream • 28+ Benchmarks • Multi-Format",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -224,7 +244,7 @@ fun TextDatabaseImportDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Memory-Safe RAM Protection Banner
+                // Memory-Safe RAM & ZIP Protection Banner
                 Surface(
                     color = Color(0xFF10B981).copy(alpha = 0.12f),
                     shape = RoundedCornerShape(8.dp),
@@ -243,14 +263,14 @@ fun TextDatabaseImportDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "⚡ Out-of-Core Stream Engine: 500MB+ dataset safe with zero OOM phone crash",
+                            text = "⚡ Out-of-Core Stream & ZIP Engine: 500MB+ safe • Zero RAM exhaustion",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color(0xFF065F46)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Format Strategy Selector Chips
                 Text(
@@ -268,7 +288,6 @@ fun TextDatabaseImportDialog(
                             selected = selectedStrategy == strat,
                             onClick = {
                                 selectedStrategy = strat
-                                // If we had raw text, trigger re-parse
                                 if (rawText.isNotBlank()) {
                                     streamingParseResult = null
                                 }
@@ -291,7 +310,7 @@ fun TextDatabaseImportDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Tabs: 0: File Upload, 1: Text Paste/Edit, 2: Preloaded Examples
+                // Primary Tabs: 0: File/ZIP Upload, 1: Text Paste/Edit, 2: 28+ Benchmark Catalog
                 PrimaryTabRow(
                     selectedTabIndex = selectedTab,
                     modifier = Modifier.fillMaxWidth()
@@ -299,19 +318,19 @@ fun TextDatabaseImportDialog(
                     Tab(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
-                        text = { Text("Upload File (500MB)", maxLines = 1, fontSize = 12.sp) },
-                        icon = { Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        text = { Text("File / ZIP (500MB)", maxLines = 1, fontSize = 12.sp) },
+                        icon = { Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        text = { Text("Paste / Edit Text", maxLines = 1, fontSize = 12.sp) },
+                        text = { Text("Paste Text", maxLines = 1, fontSize = 12.sp) },
                         icon = { Icon(Icons.Default.EditNote, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                     Tab(
                         selected = selectedTab == 2,
                         onClick = { selectedTab = 2 },
-                        text = { Text("Sample Datasets", maxLines = 1, fontSize = 12.sp) },
+                        text = { Text("28+ Datasets (${TextDatasetParser.BENCHMARK_CATALOG.size})", maxLines = 1, fontSize = 12.sp) },
                         icon = { Icon(Icons.Default.Dataset, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                 }
@@ -322,7 +341,7 @@ fun TextDatabaseImportDialog(
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when (selectedTab) {
                         0 -> {
-                            // File Upload Tab
+                            // File / ZIP Upload Tab
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -344,19 +363,19 @@ fun TextDatabaseImportDialog(
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
                                         Icon(
-                                            Icons.Default.FolderOpen,
+                                            if (isZipArchive) Icons.Default.FolderZip else Icons.Default.FolderOpen,
                                             contentDescription = null,
                                             tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(42.dp)
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = if (loadedFileName != null) "File: $loadedFileName" else "Select Large Database or Script File",
+                                            text = if (loadedFileName != null) "File: $loadedFileName" else "Select Database File or ZIP Archive",
                                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
-                                            text = if (loadedFileSize != null) "Size: $loadedFileSize • Tap to change file" else "Supports .txt, .csv, .tsv, .json, .jsonl (up to 500MB+)",
+                                            text = if (loadedFileSize != null) "Size: $loadedFileSize • Tap to change file" else "Supports .zip, .txt, .csv, .tsv, .json, .jsonl (up to 500MB+)",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -377,7 +396,7 @@ fun TextDatabaseImportDialog(
                                             Spacer(modifier = Modifier.width(12.dp))
                                             Column {
                                                 Text(
-                                                    "Streaming & Parsing Database...",
+                                                    if (isZipArchive) "Unpacking & Streaming ZIP Dataset..." else "Streaming & Parsing Database...",
                                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                                                 )
                                                 Text(
@@ -447,56 +466,70 @@ fun TextDatabaseImportDialog(
                         }
 
                         2 -> {
-                            // Preloaded Examples Tab
+                            // 28+ Major NLP Benchmark Catalog Tab
                             Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    "Ready-to-Use Benchmark Datasets:",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                // Search Bar
+                                OutlinedTextField(
+                                    value = catalogSearchQuery,
+                                    onValueChange = { catalogSearchQuery = it },
+                                    placeholder = { Text("Search 28+ datasets (e.g. Alpaca, Shakespeare, Bangla SQuAD)...", fontSize = 12.sp) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                    trailingIcon = {
+                                        if (catalogSearchQuery.isNotEmpty()) {
+                                            IconButton(onClick = { catalogSearchQuery = "" }) {
+                                                Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    },
+                                    maxLines = 1,
+                                    shape = RoundedCornerShape(12.dp)
                                 )
 
-                                // Example 1: Shakespeare Coriolanus
-                                SampleDatasetCard(
-                                    title = "🎭 Shakespeare Coriolanus Dialogue (Drama Script)",
-                                    subtitle = "Speaker: Dialogue format (First Citizen, MENENIUS, All, etc.)",
-                                    sampleSnippet = "First Citizen:\nYou are all resolved rather to die than to famish?\n\nMENENIUS:\nWhat work's, my countrymen, in hand?",
-                                    onLoad = {
-                                        rawText = TextDatasetParser.SHAKESPEARE_CORIOLANUS_SAMPLE
-                                        selectedStrategy = TextDatasetParser.DatasetFormatStrategy.SHAKESPEARE_DIALOGUE
-                                        streamingParseResult = null
-                                        selectedTab = 1
+                                // Category Filter Chips
+                                val categories = listOf("All", "Bangla NLP", "Instruction & LLM", "QA & Knowledge", "Literature & Drama", "Dialogue & Chat", "Specialized")
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(categories) { cat ->
+                                        FilterChip(
+                                            selected = catalogCategoryFilter == cat,
+                                            onClick = { catalogCategoryFilter = cat },
+                                            label = { Text(cat, fontSize = 11.sp, fontWeight = if (catalogCategoryFilter == cat) FontWeight.Bold else FontWeight.Normal) }
+                                        )
                                     }
-                                )
+                                }
 
-                                // Example 2: Bangladesh GK QA
-                                SampleDatasetCard(
-                                    title = "📋 Bangladesh GK & Questions (QA Pairs CSV)",
-                                    subtitle = "question,answer format for Knowledge Base & Quiz classification",
-                                    sampleSnippet = "question,answer\nবাংলাদেশের দীর্ঘতম নদী কোনটি?,মেঘনা\nকোন সংস্থা GDP হিসাব করে?,বাংলাদেশ পরিসংখ্যান ব্যুরো",
-                                    onLoad = {
-                                        rawText = TextDatasetParser.BANGLADESH_GK_QA_SAMPLE
-                                        selectedStrategy = TextDatasetParser.DatasetFormatStrategy.QA_QUESTION_ANSWER
-                                        streamingParseResult = null
-                                        selectedTab = 1
+                                val filteredCatalog = remember(catalogCategoryFilter, catalogSearchQuery) {
+                                    TextDatasetParser.BENCHMARK_CATALOG.filter { item ->
+                                        val matchesCat = (catalogCategoryFilter == "All" || item.category == catalogCategoryFilter)
+                                        val matchesQuery = catalogSearchQuery.isBlank() ||
+                                                item.name.contains(catalogSearchQuery, ignoreCase = true) ||
+                                                item.nameBn.contains(catalogSearchQuery, ignoreCase = true) ||
+                                                item.description.contains(catalogSearchQuery, ignoreCase = true)
+                                        matchesCat && matchesQuery
                                     }
-                                )
+                                }
 
-                                // Example 3: Instruction JSONL
-                                SampleDatasetCard(
-                                    title = "🤖 LLM Instruction Tuning (Dolly / Alpaca JSONL)",
-                                    subtitle = "{\"instruction\": \"...\", \"response\": \"...\", \"category\": \"...\"}",
-                                    sampleSnippet = "{\"instruction\": \"When did Virgin Australia start?\", \"category\": \"closed_qa\", \"response\": \"31 August 2000\"}",
-                                    onLoad = {
-                                        rawText = TextDatasetParser.INSTRUCTION_JSONL_SAMPLE
-                                        selectedStrategy = TextDatasetParser.DatasetFormatStrategy.INSTRUCTION_RESPONSE
-                                        streamingParseResult = null
-                                        selectedTab = 1
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    items(filteredCatalog, key = { it.id }) { item ->
+                                        BenchmarkCatalogItemCard(
+                                            item = item,
+                                            onLoad = {
+                                                rawText = item.sampleSnippet
+                                                selectedStrategy = item.defaultStrategy
+                                                streamingParseResult = null
+                                                selectedTab = 1
+                                                Toast.makeText(context, "Loaded ${item.name} sample!", Toast.LENGTH_SHORT).show()
+                                            }
+                                        )
                                     }
-                                )
+                                }
                             }
                         }
                     }
@@ -573,47 +606,80 @@ fun TextDatabaseImportDialog(
 }
 
 @Composable
-fun SampleDatasetCard(
-    title: String,
-    subtitle: String,
-    sampleSnippet: String,
+fun BenchmarkCatalogItemCard(
+    item: TextDatasetParser.BenchmarkDatasetInfo,
     onLoad: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(text = title, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
-                    Text(text = subtitle, style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = item.name,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                        ) {
+                            Text(
+                                text = item.category,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = item.nameBn,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+
                 Button(
                     onClick = onLoad,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    modifier = Modifier.height(34.dp)
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier.height(32.dp),
+                    shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("Load", style = MaterialTheme.typography.labelMedium)
+                    Text("Load Sample", fontSize = 11.sp)
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = item.description,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 15.sp
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(6.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = sampleSnippet,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
-                    modifier = Modifier.padding(8.dp),
+                    text = item.sampleSnippet,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 9.5.sp),
+                    modifier = Modifier.padding(6.dp),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )

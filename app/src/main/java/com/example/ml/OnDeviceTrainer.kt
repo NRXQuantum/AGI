@@ -41,7 +41,12 @@ data class TrainingProgress(
     val totalSteps: Int = 0,
     val elapsedSeconds: Long = 0L,
     val estimatedRemainingSeconds: Long = 0L,
-    val speedText: String = ""
+    val speedText: String = "",
+    val deviceTemperatureCelsius: Float = 33.5f,
+    val thermalStateLabel: String = "Cool & Safe",
+    val ramUsagePercent: Int = 40,
+    val throughputSamplesPerSec: Float = 0f,
+    val performanceProfileName: String = "Smart Adaptive"
 )
 
 data class BiometricPoint(
@@ -364,17 +369,25 @@ class OnDeviceTrainer(
         lrSchedule: LearningRateSchedule = LearningRateSchedule.COSINE_ANNEALING,
         deviceProtectionEnabled: Boolean = true,
         overallStartMs: Long = System.currentTimeMillis(),
+        context: android.content.Context? = null,
+        performanceProfile: com.example.util.HardwareResourceMonitor.PerformanceProfile = com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE,
         onProgress: suspend (TrainingProgress) -> Unit
     ) = withContext(Dispatchers.Default) {
         if (samples.isEmpty() || numClasses < 2) return@withContext
         this@OnDeviceTrainer.architecture = architecture
-        AppLogger.i("OnDeviceTrainer", "Initiating training session: epochs=$epochs, architecture=${architecture.displayName}, lr=$learningRate, batchSize=$batchSize, samples=${samples.size}, classes=$numClasses")
+        AppLogger.i("OnDeviceTrainer", "Initiating training session: epochs=$epochs, architecture=${architecture.displayName}, lr=$learningRate, batchSize=$batchSize, samples=${samples.size}, classes=$numClasses, profile=${performanceProfile.displayName}")
 
         val elapsedMsStart = System.currentTimeMillis() - overallStartMs
         val elapsedSecStart = elapsedMsStart / 1000L
 
+        val initialHw = context?.let { com.example.util.HardwareResourceMonitor.captureSnapshot(it, performanceProfile) }
+
         // Initial realistic ETA estimate based on total operations
-        val estTrainingTimeRemainingSec = ((epochs.toLong() * samples.size) / 2500L).coerceAtLeast(20L)
+        val estTrainingTimeRemainingSec = if (performanceProfile == com.example.util.HardwareResourceMonitor.PerformanceProfile.TURBO) {
+            ((epochs.toLong() * samples.size) / 10000L).coerceAtLeast(1L)
+        } else {
+            ((epochs.toLong() * samples.size) / 3500L).coerceAtLeast(2L)
+        }
 
         // Step 1: Feature Standardization
         onProgress(
@@ -390,7 +403,12 @@ class OnDeviceTrainer(
                 totalSteps = epochs * samples.size,
                 elapsedSeconds = elapsedSecStart,
                 estimatedRemainingSeconds = estTrainingTimeRemainingSec,
-                speedText = "Standardizing"
+                speedText = "Standardizing",
+                deviceTemperatureCelsius = initialHw?.temperatureCelsius ?: 33.0f,
+                thermalStateLabel = initialHw?.thermalState?.label ?: "Optimal Temp",
+                ramUsagePercent = initialHw?.ramUsagePercent ?: 40,
+                throughputSamplesPerSec = 0f,
+                performanceProfileName = performanceProfile.displayName
             )
         )
         yield()
@@ -1034,10 +1052,10 @@ class OnDeviceTrainer(
 
                 batchIndex += effectiveBatchSize
 
-                // Live continuous progress emission every ~350ms during the epoch
+                // Live continuous progress emission every ~300ms during the epoch
                 val now = System.currentTimeMillis()
                 val isEpochEnd = batchIndex >= numSamples
-                if (now - lastProgressEmitMs >= 350L || isEpochEnd) {
+                if (now - lastProgressEmitMs >= 300L || isEpochEnd) {
                     lastProgressEmitMs = now
                     val processedInEpoch = batchIndex.coerceAtMost(numSamples)
                     val totalTrainedSamplesSoFar = (epoch - 1L) * numSamples + processedInEpoch
@@ -1052,13 +1070,17 @@ class OnDeviceTrainer(
 
                     val samplesPerSec = if (trainingElapsedSec > 0) {
                         totalTrainedSamplesSoFar.toFloat() / trainingElapsedSec.coerceAtLeast(1L)
-                    } else 0f
+                    } else if (elapsedMs > 0) {
+                        (totalTrainedSamplesSoFar.toFloat() * 1000f) / elapsedMs.toFloat()
+                    } else 1000f
 
                     val remainingSamples = (totalTrainingSamplesAllEpochs - totalTrainedSamplesSoFar).coerceAtLeast(0L)
                     val estRemainingSec = if (samplesPerSec > 1f) (remainingSamples / samplesPerSec).toLong() else 0L
 
                     val runningLoss = if (processedInEpoch > 0) totalLoss / processedInEpoch else 0f
                     val runningAcc = if (processedInEpoch > 0) correctPredictions.toFloat() / processedInEpoch else 0f
+
+                    val hwSnapshot = context?.let { com.example.util.HardwareResourceMonitor.captureSnapshot(it, performanceProfile) }
 
                     val speedText = if (samplesPerSec > 0) {
                         String.format(Locale.US, "%.0f smp/s", samplesPerSec)
@@ -1079,7 +1101,12 @@ class OnDeviceTrainer(
                             totalSteps = (epochs * numSamples),
                             elapsedSeconds = elapsedSec,
                             estimatedRemainingSeconds = estRemainingSec,
-                            speedText = speedText
+                            speedText = speedText,
+                            deviceTemperatureCelsius = hwSnapshot?.temperatureCelsius ?: 33.5f,
+                            thermalStateLabel = hwSnapshot?.thermalState?.label ?: "Optimal Temp",
+                            ramUsagePercent = hwSnapshot?.ramUsagePercent ?: 40,
+                            throughputSamplesPerSec = samplesPerSec,
+                            performanceProfileName = performanceProfile.displayName
                         )
                     )
                 }
@@ -1091,10 +1118,16 @@ class OnDeviceTrainer(
             val epochFinalAcc = if (numSamples > 0) correctPredictions.toFloat() / numSamples else 0f
             AppLogger.i("OnDeviceTrainer", "[Epoch $epoch/$epochs] Completed: Loss=${String.format(Locale.US, "%.4f", epochFinalLoss)}, Acc=${String.format(Locale.US, "%.1f%%", epochFinalAcc * 100f)}, Correct=$correctPredictions/$numSamples")
 
-            if (numSamples < 200) {
-                delay(300)
-            } else if (deviceProtectionEnabled) {
-                delay(12)
+            // Dynamic Adaptive Pacing (Zero artificial pauses for Turbo or Cool devices)
+            val hwSnapshot = context?.let { com.example.util.HardwareResourceMonitor.captureSnapshot(it, performanceProfile) }
+            val dynamicThrottleMs = hwSnapshot?.throttleDelayMs ?: when (performanceProfile) {
+                com.example.util.HardwareResourceMonitor.PerformanceProfile.TURBO -> 0L
+                com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE -> 0L
+                com.example.util.HardwareResourceMonitor.PerformanceProfile.ECO_BATTERY -> 6L
+            }
+
+            if (dynamicThrottleMs > 0L) {
+                delay(dynamicThrottleMs)
             } else {
                 yield()
             }

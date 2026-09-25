@@ -36,7 +36,8 @@ object TrainingManager {
         architecture: ModelArchitecture = ModelArchitecture.DEEP_RESIDUAL_MLP,
         optimizerType: OptimizerType = OptimizerType.ADAM_W,
         lrSchedule: LearningRateSchedule = LearningRateSchedule.COSINE_ANNEALING,
-        deviceProtectionEnabled: Boolean = true
+        deviceProtectionEnabled: Boolean = true,
+        performanceProfile: com.example.util.HardwareResourceMonitor.PerformanceProfile = com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE
     ) {
         _activeTrainingProjectId.value = projectId
         _activeProjectName.value = projectName
@@ -46,9 +47,10 @@ object TrainingManager {
             totalEpochs = epochs,
             loss = 0f,
             accuracy = 0f,
-            statusMessage = "Starting deep neural network training service...",
+            statusMessage = "Starting deep neural network training service (${performanceProfile.displayName})...",
             overallPercentage = 0f,
-            phase = TrainingPhase.EXTRACTING_FEATURES
+            phase = TrainingPhase.EXTRACTING_FEATURES,
+            performanceProfileName = performanceProfile.displayName
         )
 
         val intent = Intent(context, TrainingForegroundService::class.java).apply {
@@ -62,6 +64,7 @@ object TrainingManager {
             putExtra(TrainingForegroundService.EXTRA_OPTIMIZER, optimizerType.name)
             putExtra(TrainingForegroundService.EXTRA_LR_SCHEDULE, lrSchedule.name)
             putExtra(TrainingForegroundService.EXTRA_DEVICE_PROTECTION, deviceProtectionEnabled)
+            putExtra(TrainingForegroundService.EXTRA_PERFORMANCE_PROFILE, performanceProfile.name)
         }
 
         try {

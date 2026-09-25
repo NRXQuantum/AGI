@@ -79,6 +79,13 @@ class TrainingForegroundService : Service() {
                     LearningRateSchedule.COSINE_ANNEALING
                 }
 
+                val perfStr = intent.getStringExtra(EXTRA_PERFORMANCE_PROFILE)
+                val performanceProfile = try {
+                    com.example.util.HardwareResourceMonitor.PerformanceProfile.valueOf(perfStr ?: "")
+                } catch (e: Exception) {
+                    com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE
+                }
+
                 if (projectId != -1L) {
                     startTrainingJob(
                         projectId = projectId,
@@ -88,7 +95,8 @@ class TrainingForegroundService : Service() {
                         architecture = architecture,
                         optimizerType = optimizerType,
                         lrSchedule = lrSchedule,
-                        deviceProtection = deviceProtection
+                        deviceProtection = deviceProtection,
+                        performanceProfile = performanceProfile
                     )
                 } else {
                     stopSelf()
@@ -111,7 +119,8 @@ class TrainingForegroundService : Service() {
         architecture: ModelArchitecture,
         optimizerType: OptimizerType,
         lrSchedule: LearningRateSchedule,
-        deviceProtection: Boolean
+        deviceProtection: Boolean,
+        performanceProfile: com.example.util.HardwareResourceMonitor.PerformanceProfile = com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE
     ) {
         acquireWakeLock()
 
@@ -155,6 +164,7 @@ class TrainingForegroundService : Service() {
                     optimizerType = optimizerType,
                     lrSchedule = lrSchedule,
                     deviceProtectionEnabled = deviceProtection,
+                    performanceProfile = performanceProfile,
                     onProgress = { progress ->
                         TrainingManager.updateProgress(progress)
                         updateNotificationThrottled(progress)
@@ -384,5 +394,6 @@ class TrainingForegroundService : Service() {
         const val EXTRA_OPTIMIZER = "extra_optimizer"
         const val EXTRA_LR_SCHEDULE = "extra_lr_schedule"
         const val EXTRA_DEVICE_PROTECTION = "extra_device_protection"
+        const val EXTRA_PERFORMANCE_PROFILE = "extra_performance_profile"
     }
 }

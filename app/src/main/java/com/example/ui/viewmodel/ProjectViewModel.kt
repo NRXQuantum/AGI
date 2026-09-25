@@ -617,6 +617,18 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // Hardware Performance Profile (Turbo vs Smart Adaptive vs Eco Battery)
+    private val _selectedPerformanceProfile = MutableStateFlow(com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE)
+    val selectedPerformanceProfile: StateFlow<com.example.util.HardwareResourceMonitor.PerformanceProfile> = _selectedPerformanceProfile.asStateFlow()
+
+    fun setPerformanceProfile(profile: com.example.util.HardwareResourceMonitor.PerformanceProfile) {
+        _selectedPerformanceProfile.value = profile
+    }
+
+    fun captureCurrentHardwareSnapshot(): com.example.util.HardwareResourceMonitor.HardwareSnapshot {
+        return com.example.util.HardwareResourceMonitor.captureSnapshot(getApplication(), _selectedPerformanceProfile.value)
+    }
+
     fun startOnDeviceTraining(
         epochs: Int = 30,
         learningRate: Float = 0.003f,
@@ -637,7 +649,8 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
             architecture = architecture,
             optimizerType = optimizerType,
             lrSchedule = lrSchedule,
-            deviceProtectionEnabled = _deviceProtectionEnabled.value
+            deviceProtectionEnabled = _deviceProtectionEnabled.value,
+            performanceProfile = _selectedPerformanceProfile.value
         )
     }
 

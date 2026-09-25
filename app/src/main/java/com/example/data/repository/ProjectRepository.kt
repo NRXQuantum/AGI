@@ -333,6 +333,7 @@ class ProjectRepository(
         optimizerType: OptimizerType = OptimizerType.ADAM_W,
         lrSchedule: LearningRateSchedule = LearningRateSchedule.COSINE_ANNEALING,
         deviceProtectionEnabled: Boolean = true,
+        performanceProfile: com.example.util.HardwareResourceMonitor.PerformanceProfile = com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE,
         onProgress: suspend (TrainingProgress) -> Unit
     ) = withContext(Dispatchers.IO) {
         val overallStartMs = System.currentTimeMillis()
@@ -469,6 +470,8 @@ class ProjectRepository(
                 lrSchedule = lrSchedule,
                 deviceProtectionEnabled = deviceProtectionEnabled,
                 overallStartMs = overallStartMs,
+                context = context,
+                performanceProfile = performanceProfile,
                 onProgress = { progress ->
                     finalLoss = progress.loss
                     finalAccuracy = progress.accuracy
@@ -1016,6 +1019,8 @@ class ProjectRepository(
             lrSchedule = lrSchedule,
             deviceProtectionEnabled = deviceProtectionEnabled,
             overallStartMs = overallStartMs,
+            context = context,
+            performanceProfile = performanceProfile,
             onProgress = { progress ->
                 finalLoss = progress.loss
                 finalAccuracy = progress.accuracy
