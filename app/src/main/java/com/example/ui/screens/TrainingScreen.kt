@@ -497,7 +497,7 @@ fun TrainingScreen(
                                     text = if (canTrain) {
                                         when {
                                             isFaceMode -> "$numClasses individuals enrolled. Face, body & patch alignment ready."
-                                            isTextMode -> "$numClasses text categories loaded. 3-Expert MoE ready."
+                                            isTextMode -> "$numClasses text categories loaded. ${selectedArchitecture.displayName} ready."
                                             else -> "$numClasses categories loaded. Feature scaling & SGD ready."
                                         }
                                     } else {
@@ -749,6 +749,24 @@ fun TrainingScreen(
                     viewModel = viewModel,
                     isTraining = isTraining
                 )
+            } else if (isTextMode) {
+                // ==========================================
+                // TEXT & NLP TRAINING SETTINGS CARD (3-EXPERT MoE / 2MB+ DATASET)
+                // ==========================================
+                TextNlpSettingsCard(
+                    viewModel = viewModel,
+                    isTraining = isTraining,
+                    selectedArchitecture = selectedArchitecture,
+                    selectedOptimizer = selectedOptimizer,
+                    selectedLrSchedule = selectedLrSchedule,
+                    batchSize = batchSize,
+                    epochs = epochs,
+                    learningRate = learningRate,
+                    totalSamples = totalSamples,
+                    onUpdateParam = { arch, opt, sched, bs, ep, lr ->
+                        updateParam(arch, opt, sched, bs, ep, lr)
+                    }
+                )
             } else {
                 // ==========================================
                 // TRAINING HYPERPARAMETERS CARD (NORMAL IMAGES ONLY)
@@ -952,7 +970,7 @@ fun TrainingScreen(
                             .padding(vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        listOf(8, 16, 32, 64, 128, 256).forEach { bs ->
+                        listOf(8, 16, 32, 64, 128, 256, 512, 1024).forEach { bs ->
                             FilterChip(
                                 selected = batchSize == bs,
                                 onClick = { 
@@ -1346,6 +1364,571 @@ private fun formatElapsed(seconds: Long): String {
     val m = seconds / 60
     val s = seconds % 60
     return String.format(Locale.US, "%02d:%02d", m, s)
+}
+
+@Composable
+fun TextNlpSettingsCard(
+    viewModel: ProjectViewModel,
+    isTraining: Boolean,
+    selectedArchitecture: ModelArchitecture,
+    selectedOptimizer: OptimizerType,
+    selectedLrSchedule: LearningRateSchedule,
+    batchSize: Int,
+    epochs: Float,
+    learningRate: Float,
+    totalSamples: Int,
+    onUpdateParam: (ModelArchitecture, OptimizerType, LearningRateSchedule, Int, Float, Float) -> Unit
+) {
+    val deviceProtection by viewModel.deviceProtectionEnabled.collectAsState()
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF10B981).copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.TextFields,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Text & NLP Training Settings",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "${selectedArchitecture.displayName} • Dense Embeddings • On-Device NLP",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    color = Color(0xFF10B981).copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = when (selectedArchitecture) {
+                            ModelArchitecture.DEEP_RESIDUAL_MLP -> "3-EXPERT MoE"
+                            ModelArchitecture.STANDARD_MLP -> "2-LAYER MLP"
+                            ModelArchitecture.LINEAR -> "LINEAR SOFTMAX"
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.8.sp
+                        ),
+                        color = Color(0xFF10B981),
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Large Database (2MB+ txt) / NLP Engine Status Banner
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .padding(top = 1.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "Large Text Database Optimized (~2MB / $totalSamples Samples)",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "সিস্টেমটি 2MB+ টেক্সট ডাটাবেজ / ডায়লগ স্ক্রিপ্ট (যেমন input.txt) এর প্রতিটি চরিত্র বা ক্লাস অনুযায়ী সম্পূর্ণ অন-ডিভাইস প্রসেস করে। Multi-Token Hash Ring ও Memory-Safe Chunks এর মাধ্যমে মেমোরি ক্র্যাশ ছাড়াই দ্রুততম ব্যাকপ্রোপাগেশন নিশ্চিত করা হয়েছে।",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 1. Architecture Selection
+            Text(
+                text = "Network Architecture & Depth (নিউরাল নেটওয়ার্ক আর্কিটেকচার)",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ModelArchitecture.entries.forEach { arch ->
+                    val isSelected = selectedArchitecture == arch
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(
+                            if (isSelected) 1.5.dp else 1.dp,
+                            if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isTraining) {
+                                onUpdateParam(arch, selectedOptimizer, selectedLrSchedule, batchSize, epochs, learningRate)
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = null,
+                                enabled = !isTraining
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = when (arch) {
+                                            ModelArchitecture.DEEP_RESIDUAL_MLP -> "3-Expert MoE Deep Residual MLP"
+                                            ModelArchitecture.STANDARD_MLP -> "2-Layer Subword & Lexical MLP"
+                                            ModelArchitecture.LINEAR -> "Linear Sparse Softmax Classifier"
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (arch == ModelArchitecture.DEEP_RESIDUAL_MLP) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primary,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "BEST FOR 2MB",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.sp),
+                                                color = MaterialTheme.colorScheme.onPrimary,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = when (arch) {
+                                        ModelArchitecture.DEEP_RESIDUAL_MLP -> "Deep 3-Layer MoE with LayerNorm, GELU & Skip Connections. Ideal for rich vocabulary & dialogue datasets."
+                                        ModelArchitecture.STANDARD_MLP -> "Dense 128D semantic projection with ReLU & Dropout for fast non-linear convergence."
+                                        ModelArchitecture.LINEAR -> "Ultra-fast sparse linear classifier for small vocabulary."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 2. Optimizer Selection
+            Text(
+                text = "Optimizer Algorithm (অপটিমাইজার অ্যালগরিদম)",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    OptimizerType.ADAM_W to "AdamW",
+                    OptimizerType.MOMENTUM_SGD to "Momentum",
+                    OptimizerType.VANILLA_SGD to "SGD"
+                ).forEach { (opt, label) ->
+                    FilterChip(
+                        selected = selectedOptimizer == opt,
+                        onClick = { 
+                            if (!isTraining) {
+                                onUpdateParam(selectedArchitecture, opt, selectedLrSchedule, batchSize, epochs, learningRate)
+                            }
+                        },
+                        label = {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text(label, maxLines = 1)
+                            }
+                        },
+                        enabled = !isTraining,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 3. Learning Rate Scheduler
+            Text(
+                text = "Learning Rate Schedule (লার্নিং রেট শিডিউলার)",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    LearningRateSchedule.COSINE_ANNEALING to "Cosine",
+                    LearningRateSchedule.STEP_DECAY to "Step",
+                    LearningRateSchedule.CONSTANT to "Constant"
+                ).forEach { (sched, label) ->
+                    FilterChip(
+                        selected = selectedLrSchedule == sched,
+                        onClick = { 
+                            if (!isTraining) {
+                                onUpdateParam(selectedArchitecture, selectedOptimizer, sched, batchSize, epochs, learningRate)
+                            }
+                        },
+                        label = {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text(label, maxLines = 1)
+                            }
+                        },
+                        enabled = !isTraining,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 4. Batch Size
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Mini-Batch Size (মিনি-ব্যাচ সাইজ)",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Text(
+                        text = "2MB ডেটাসেটে 64-256 ব্যাচ সাইজ সবচেয়ে দ্রুত ও কার্যকর",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = "$batchSize samples",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(8, 16, 32, 64, 128, 256, 512, 1024).forEach { bs ->
+                    FilterChip(
+                        selected = batchSize == bs,
+                        onClick = { 
+                            if (!isTraining) {
+                                onUpdateParam(selectedArchitecture, selectedOptimizer, selectedLrSchedule, bs, epochs, learningRate)
+                            }
+                        },
+                        label = {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "$bs",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = if (batchSize == bs) FontWeight.Bold else FontWeight.Medium
+                                    ),
+                                    maxLines = 1
+                                )
+                            }
+                        },
+                        enabled = !isTraining,
+                        modifier = Modifier.width(72.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Epochs presets + Slider
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Training Epochs (প্রশিক্ষণ চক্র)",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = "${epochs.toInt()} epochs",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(15f, 30f, 50f, 100f).forEach { ep ->
+                    FilterChip(
+                        selected = epochs.toInt() == ep.toInt(),
+                        onClick = { 
+                            if (!isTraining) {
+                                onUpdateParam(selectedArchitecture, selectedOptimizer, selectedLrSchedule, batchSize, ep, learningRate)
+                            }
+                        },
+                        label = {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text("${ep.toInt()}", maxLines = 1)
+                            }
+                        },
+                        enabled = !isTraining,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Slider(
+                value = epochs,
+                onValueChange = { 
+                    onUpdateParam(selectedArchitecture, selectedOptimizer, selectedLrSchedule, batchSize, kotlin.math.round(it), learningRate)
+                },
+                valueRange = 10f..100f,
+                steps = 17,
+                enabled = !isTraining,
+                modifier = Modifier.testTag("text_epochs_slider")
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Learning Rate
+            Text(
+                text = "Initial Learning Rate (η): $learningRate",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(0.001f, 0.003f, 0.005f, 0.01f).forEach { lr ->
+                    FilterChip(
+                        selected = kotlin.math.abs(learningRate - lr) < 0.0001f,
+                        onClick = { 
+                            if (!isTraining) {
+                                onUpdateParam(selectedArchitecture, selectedOptimizer, selectedLrSchedule, batchSize, epochs, lr)
+                            }
+                        },
+                        label = {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text("$lr", maxLines = 1)
+                            }
+                        },
+                        enabled = !isTraining,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 3-Expert MoE Pipeline Details Banner
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text(
+                        text = "ACTIVE 3-EXPERT MoE PIPELINE",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp
+                        ),
+                        color = Color(0xFF10B981)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Expert 1: Lexical Semantics (Word Unigrams & Bigrams - 64D)",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Expert 2: Morphological Subwords (Char N-Grams 3..5 - 32D)",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Expert 3: Structural & Punctuation Stylometry (32D)",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Attention Budget: Head (70%) + Tail (30%) Token Preservation",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Thermal & Battery Protection
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BatteryChargingFull,
+                            contentDescription = null,
+                            tint = if (deviceProtection) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Thermal & Battery Protection",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "Regulates CPU duty cycle during large 2MB text database training.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = deviceProtection,
+                        onCheckedChange = { viewModel.toggleDeviceProtection(it) },
+                        enabled = !isTraining,
+                        modifier = Modifier.testTag("text_device_protection_switch")
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

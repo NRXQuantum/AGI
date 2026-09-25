@@ -374,6 +374,39 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         _textInferenceResult.value = null
     }
 
+    private val _chatMessages = MutableStateFlow<List<TextModelEngine.TextChatMessage>>(emptyList())
+    val chatMessages: StateFlow<List<TextModelEngine.TextChatMessage>> = _chatMessages.asStateFlow()
+
+    private val _isChatGenerating = MutableStateFlow(false)
+    val isChatGenerating: StateFlow<Boolean> = _isChatGenerating.asStateFlow()
+
+    fun sendChatMessage(userText: String, tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) {
+        val pId = _selectedProjectId.value ?: return
+        if (userText.isBlank()) return
+        val userMsg = TextModelEngine.TextChatMessage(
+            isUser = true,
+            text = userText.trim(),
+            senderName = "You",
+            timestampMs = System.currentTimeMillis()
+        )
+        _chatMessages.value = _chatMessages.value + userMsg
+        viewModelScope.launch {
+            _isChatGenerating.value = true
+            try {
+                val reply = repository.generateDialogueReply(pId, userText, tokenLimit)
+                _chatMessages.value = _chatMessages.value + reply
+            } catch (e: Exception) {
+                AppLogger.e("ProjectViewModel", "Error in generateDialogueReply", e)
+            } finally {
+                _isChatGenerating.value = false
+            }
+        }
+    }
+
+    fun clearChatMessages() {
+        _chatMessages.value = emptyList()
+    }
+
     fun deleteProject(projectId: Long) {
         viewModelScope.launch {
             repository.deleteProject(projectId)

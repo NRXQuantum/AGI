@@ -53,6 +53,19 @@ object TextModelEngine {
         val energyMicroJoules: Float
     )
 
+    data class TextChatMessage(
+        val id: String = java.util.UUID.randomUUID().toString(),
+        val isUser: Boolean,
+        val text: String,
+        val senderName: String,
+        val timestampMs: Long = System.currentTimeMillis(),
+        val predictedClass: String? = null,
+        val confidence: Float = 0f,
+        val latencyMs: Long = 0L,
+        val salientKeywords: List<String> = emptyList(),
+        val classProbabilities: List<ClassConfidence> = emptyList()
+    )
+
     data class PreloadedDataset(
         val name: String,
         val description: String,

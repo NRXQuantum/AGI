@@ -398,10 +398,39 @@ class ProjectRepository(
             val classMap = classes.mapIndexed { idx, c -> c.id to Pair(idx, c.className) }.toMap()
             val trainingSamples = mutableListOf<TrainingSample>()
 
+            var processedCount = 0
+            val reportInterval = (totalTextSamples / 20).coerceIn(5, 50)
+            val startTimeMs = System.currentTimeMillis()
+
             for (sample in allTextSamples) {
                 val classInfo = classMap[sample.classId] ?: continue
                 val features = TextModelEngine.extractTextFeatures(sample.textContent)
                 trainingSamples.add(TrainingSample(features, classInfo.first, classInfo.second))
+                processedCount++
+
+                if (processedCount % reportInterval == 0 || processedCount == totalTextSamples) {
+                    val pct = (processedCount.toFloat() / totalTextSamples.toFloat()) * 20f // 0% to 20% of total training
+                    val elapsed = (System.currentTimeMillis() - startTimeMs) / 1000L
+                    val rate = if (elapsed > 0) processedCount.toFloat() / elapsed else 50f
+                    val remSec = if (rate > 0) ((totalTextSamples - processedCount) / rate).toLong() else 1L
+                    onProgress(
+                        TrainingProgress(
+                            currentEpoch = 0,
+                            totalEpochs = epochs,
+                            loss = 0f,
+                            accuracy = 0f,
+                            statusMessage = "Analyzing & tokenizing text: $processedCount / $totalTextSamples samples (3-Expert MoE)...",
+                            overallPercentage = pct,
+                            phase = TrainingPhase.EXTRACTING_FEATURES,
+                            currentStep = processedCount,
+                            totalSteps = totalTextSamples,
+                            elapsedSeconds = elapsed,
+                            estimatedRemainingSeconds = remSec,
+                            speedText = String.format(Locale.US, "%.0f samples/s", rate)
+                        )
+                    )
+                    kotlinx.coroutines.yield()
+                }
             }
 
             if (trainingSamples.isEmpty()) {
@@ -1812,6 +1841,68 @@ class ProjectRepository(
             tokenLimit = tokenLimit,
             salientTokens = salient,
             energyMicroJoules = energyUj
+        )
+    }
+
+    suspend fun generateDialogueReply(
+        projectId: Long,
+        userPrompt: String,
+        tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT
+    ): TextModelEngine.TextChatMessage = withContext(Dispatchers.Default) {
+        val startMs = System.currentTimeMillis()
+        val prediction = predictText(projectId, userPrompt, tokenLimit)
+        val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+
+        val allSamples = dao.getAllTextSamplesForProjectDirect(projectId)
+        val classes = dao.getClassesForProjectDirect(projectId)
+        val matchedClass = classes.find { it.className.equals(prediction.classLabel, ignoreCase = true) }
+
+        val classSamples = if (matchedClass != null) {
+            allSamples.filter { it.classId == matchedClass.id }
+        } else emptyList()
+
+        val promptTokens = TextModelEngine.tokenize(userPrompt).tokens
+            .map { it.clean.lowercase(Locale.ROOT) }
+            .filter { it.length > 2 }
+            .toSet()
+
+        val bestReply = if (classSamples.isNotEmpty()) {
+            var topSample = classSamples.first()
+            var maxScore = -9999f
+            for (sample in classSamples) {
+                val sTokens = TextModelEngine.tokenize(sample.textContent).tokens
+                    .map { it.clean.lowercase(Locale.ROOT) }
+                    .toSet()
+                val overlap = promptTokens.intersect(sTokens).size
+                val lenDiff = kotlin.math.abs(sample.textContent.length - 90) * 0.002f
+                val score = (overlap * 2.5f) - lenDiff
+                if (score > maxScore) {
+                    maxScore = score
+                    topSample = sample
+                }
+            }
+            if (topSample.textContent.trim().equals(userPrompt.trim(), ignoreCase = true) && classSamples.size > 1) {
+                val otherSamples = classSamples.filter { !it.textContent.trim().equals(userPrompt.trim(), ignoreCase = true) }
+                otherSamples.randomOrNull()?.textContent ?: topSample.textContent
+            } else {
+                topSample.textContent
+            }
+        } else {
+            "Response matching category '${prediction.classLabel}' with ${String.format(Locale.US, "%.1f%%", prediction.confidence * 100f)} confidence."
+        }
+
+        val salientWords = prediction.salientTokens.map { it.first }
+
+        TextModelEngine.TextChatMessage(
+            isUser = false,
+            text = bestReply,
+            senderName = if (prediction.classLabel.isNotBlank() && prediction.classLabel != "No Model") prediction.classLabel else "Trained Model",
+            timestampMs = System.currentTimeMillis(),
+            predictedClass = prediction.classLabel,
+            confidence = prediction.confidence,
+            latencyMs = elapsedMs,
+            salientKeywords = salientWords,
+            classProbabilities = prediction.allProbabilities
         )
     }
 
