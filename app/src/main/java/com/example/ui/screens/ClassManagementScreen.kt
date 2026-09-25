@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,9 +22,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -189,6 +193,15 @@ fun ClassManagementScreen(
     val selectedClass = classes.find { it.id == selectedClassId }
     val isFaceRecognition = project?.projectType == "FACE_RECOGNITION"
     var showFaceEnrollmentDialog by remember { mutableStateOf(false) }
+
+    BackHandler {
+        if (isSelectMode) {
+            isSelectMode = false
+            selectedSampleIds = emptySet()
+        } else {
+            onNavigateBack?.invoke()
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -378,40 +391,41 @@ fun ClassManagementScreen(
                 val startItemIndex = if (totalCount == 0) 0 else (safeCurrentPage * effectivePageSize + 1)
                 val endItemIndex = minOf((safeCurrentPage * effectivePageSize) + paginatedSamples.size, totalCount)
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    // Class Header & Image Counter Progress
-                    ClassProgressHeader(
-                        classificationClass = selectedClass,
-                        sampleCount = samples.size,
-                        isFaceRecognition = isFaceRecognition,
-                        onEditClass = { classToEdit = selectedClass },
-                        onAddGallery = {
-                            galleryLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
-                        onAddFiles = {
-                            documentPickerLauncher.launch(arrayOf("image/*"))
-                        },
-                        onAddCamera = {
-                            handleCameraClick()
-                        },
-                        onEnrollFace = {
-                            showFaceEnrollmentDialog = true
-                        },
-                        onDeleteClass = {
-                            viewModel.deleteClass(selectedClass.id)
-                            selectedClassId = classes.firstOrNull { it.id != selectedClass.id }?.id
-                        }
-                    )
+                if (samples.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp)
+                    ) {
+                        ClassProgressHeader(
+                            classificationClass = selectedClass,
+                            sampleCount = 0,
+                            isFaceRecognition = isFaceRecognition,
+                            onEditClass = { classToEdit = selectedClass },
+                            onAddGallery = {
+                                galleryLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            onAddFiles = {
+                                documentPickerLauncher.launch(arrayOf("image/*"))
+                            },
+                            onAddCamera = {
+                                handleCameraClick()
+                            },
+                            onEnrollFace = {
+                                showFaceEnrollmentDialog = true
+                            },
+                            onDeleteClass = {
+                                viewModel.deleteClass(selectedClass.id)
+                                selectedClassId = classes.firstOrNull { it.id != selectedClass.id }?.id
+                            },
+                            initiallyExpanded = true
+                        )
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                    if (samples.isEmpty()) {
                         EmptySamplesView(
                             className = selectedClass.className,
                             isFaceRecognition = isFaceRecognition,
@@ -430,164 +444,203 @@ fun ClassManagementScreen(
                                 showFaceEnrollmentDialog = true
                             }
                         )
-                    } else {
-                        // Data Labeling & Batch Management Toolbar
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Column(
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 100.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        // 1. Sleek, scrollable/collapsible header (doesn't block the screen)
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            ClassProgressHeader(
+                                classificationClass = selectedClass,
+                                sampleCount = samples.size,
+                                isFaceRecognition = isFaceRecognition,
+                                onEditClass = { classToEdit = selectedClass },
+                                onAddGallery = {
+                                    galleryLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                onAddFiles = {
+                                    documentPickerLauncher.launch(arrayOf("image/*"))
+                                },
+                                onAddCamera = {
+                                    handleCameraClick()
+                                },
+                                onEnrollFace = {
+                                    showFaceEnrollmentDialog = true
+                                },
+                                onDeleteClass = {
+                                    viewModel.deleteClass(selectedClass.id)
+                                    selectedClassId = classes.firstOrNull { it.id != selectedClass.id }?.id
+                                },
+                                initiallyExpanded = false
+                            )
+                        }
+
+                        // 2. Data Labeling & Batch Management Toolbar
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
                                 ) {
-                                    if (isSelectMode) {
-                                        val isCurrentPageAllSelected = paginatedSamples.isNotEmpty() && paginatedSamples.all { selectedSampleIds.contains(it.id) }
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Checkbox(
-                                                checked = isCurrentPageAllSelected,
-                                                onCheckedChange = { checked ->
-                                                    val pageIds = paginatedSamples.map { it.id }.toSet()
-                                                    selectedSampleIds = if (checked) {
-                                                        selectedSampleIds + pageIds
-                                                    } else {
-                                                        selectedSampleIds - pageIds
-                                                    }
-                                                }
-                                            )
-                                            Text(
-                                                text = "${selectedSampleIds.size} selected",
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                                            )
-                                        }
-
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            if (totalCount > paginatedSamples.size) {
-                                                TextButton(
-                                                    onClick = {
-                                                        selectedSampleIds = if (selectedSampleIds.size == totalCount) emptySet() else samples.map { it.id }.toSet()
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                                ) {
-                                                    Text(
-                                                        if (selectedSampleIds.size == totalCount) "Clear All" else "Select All ($totalCount)",
-                                                        fontSize = 11.sp
-                                                    )
-                                                }
-                                            }
-
-                                            if (selectedSampleIds.isNotEmpty()) {
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        viewModel.deleteSamplesBatch(selectedSampleIds.toList())
-                                                        selectedSampleIds = emptySet()
-                                                        isSelectMode = false
-                                                        Toast.makeText(context, "Deleted selected samples", Toast.LENGTH_SHORT).show()
-                                                    },
-                                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text("Delete (${selectedSampleIds.size})", fontSize = 12.sp)
-                                                }
-                                            }
-
-                                            TextButton(
-                                                onClick = {
-                                                    isSelectMode = false
-                                                    selectedSampleIds = emptySet()
-                                                },
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                            ) {
-                                                Text("Cancel", fontSize = 12.sp)
-                                            }
-                                        }
-                                    } else {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.PhotoLibrary,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "Dataset ($totalCount items)",
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                                            )
-                                        }
-
-                                        OutlinedButton(
-                                            onClick = { isSelectMode = true },
-                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                                        ) {
-                                            Icon(Icons.Default.Checklist, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Select Batch", fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-
-                                // Pagination Info & Page Size Options
-                                if (totalCount > 12) {
-                                    Spacer(modifier = Modifier.height(6.dp))
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = if (pageSize > 0 && totalCount > pageSize) {
-                                                "Showing $startItemIndex–$endItemIndex of $totalCount items"
-                                            } else {
-                                                "Showing all $totalCount items"
-                                            },
-                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                        if (isSelectMode) {
+                                            val isCurrentPageAllSelected = paginatedSamples.isNotEmpty() && paginatedSamples.all { selectedSampleIds.contains(it.id) }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Checkbox(
+                                                    checked = isCurrentPageAllSelected,
+                                                    onCheckedChange = { checked ->
+                                                        val pageIds = paginatedSamples.map { it.id }.toSet()
+                                                        selectedSampleIds = if (checked) {
+                                                            selectedSampleIds + pageIds
+                                                        } else {
+                                                            selectedSampleIds - pageIds
+                                                        }
+                                                    }
+                                                )
+                                                Text(
+                                                    text = "${selectedSampleIds.size} selected",
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                                )
+                                            }
 
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                if (totalCount > paginatedSamples.size) {
+                                                    TextButton(
+                                                        onClick = {
+                                                            selectedSampleIds = if (selectedSampleIds.size == totalCount) emptySet() else samples.map { it.id }.toSet()
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                                    ) {
+                                                        Text(
+                                                            if (selectedSampleIds.size == totalCount) "Clear All" else "Select All ($totalCount)",
+                                                            fontSize = 11.sp
+                                                        )
+                                                    }
+                                                }
+
+                                                if (selectedSampleIds.isNotEmpty()) {
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            viewModel.deleteSamplesBatch(selectedSampleIds.toList())
+                                                            selectedSampleIds = emptySet()
+                                                            isSelectMode = false
+                                                            Toast.makeText(context, "Deleted selected samples", Toast.LENGTH_SHORT).show()
+                                                        },
+                                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Delete (${selectedSampleIds.size})", fontSize = 12.sp)
+                                                    }
+                                                }
+
+                                                TextButton(
+                                                    onClick = {
+                                                        isSelectMode = false
+                                                        selectedSampleIds = emptySet()
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text("Cancel", fontSize = 12.sp)
+                                                }
+                                            }
+                                        } else {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.PhotoLibrary,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Dataset ($totalCount items)",
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                )
+                                            }
+
+                                            OutlinedButton(
+                                                onClick = { isSelectMode = true },
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                            ) {
+                                                Icon(Icons.Default.Checklist, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Select Batch", fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+
+                                    // Pagination Info & Page Size Options
+                                    if (totalCount > 12) {
+                                        Spacer(modifier = Modifier.height(6.dp))
                                         Row(
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = "Per page:",
+                                                text = if (pageSize > 0 && totalCount > pageSize) {
+                                                    "Showing $startItemIndex–$endItemIndex of $totalCount items"
+                                                } else {
+                                                    "Showing all $totalCount items"
+                                                },
                                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
-                                            listOf(24, 48, 96, 0).forEach { sizeOption ->
-                                                val isSelected = pageSize == sizeOption
-                                                Surface(
-                                                    onClick = {
-                                                        pageSize = sizeOption
-                                                        currentPage = 0
-                                                    },
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
-                                                    border = BorderStroke(
-                                                        1.dp,
-                                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                                    )
-                                                ) {
-                                                    Text(
-                                                        text = if (sizeOption == 0) "All" else "$sizeOption",
-                                                        fontSize = 11.sp,
-                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    )
+
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Per page:",
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                listOf(24, 48, 96, 0).forEach { sizeOption ->
+                                                    val isSelected = pageSize == sizeOption
+                                                    Surface(
+                                                        onClick = {
+                                                            pageSize = sizeOption
+                                                            currentPage = 0
+                                                        },
+                                                        shape = RoundedCornerShape(6.dp),
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                                        border = BorderStroke(
+                                                            1.dp,
+                                                            if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                                        )
+                                                    ) {
+                                                        Text(
+                                                            text = if (sizeOption == 0) "All" else "$sizeOption",
+                                                            fontSize = 11.sp,
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -596,111 +649,105 @@ fun ClassManagementScreen(
                             }
                         }
 
-                        // Grid of Images (paginated to keep phone ultra fast and lag-free)
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 100.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(bottom = 8.dp)
-                        ) {
-                            items(paginatedSamples, key = { it.id }) { sample ->
-                                ImageSampleGridTile(
-                                    sample = sample,
-                                    isSelectMode = isSelectMode,
-                                    isSelected = selectedSampleIds.contains(sample.id),
-                                    onToggleSelect = {
-                                        selectedSampleIds = if (selectedSampleIds.contains(sample.id)) {
-                                            selectedSampleIds - sample.id
-                                        } else {
-                                            selectedSampleIds + sample.id
-                                        }
-                                    },
-                                    onClickPreview = { previewSample = sample },
-                                    onDelete = { viewModel.deleteSample(sample.id) }
-                                )
-                            }
+                        // 3. Grid of Images (paginated and fast)
+                        items(paginatedSamples, key = { it.id }) { sample ->
+                            ImageSampleGridTile(
+                                sample = sample,
+                                isSelectMode = isSelectMode,
+                                isSelected = selectedSampleIds.contains(sample.id),
+                                onToggleSelect = {
+                                    selectedSampleIds = if (selectedSampleIds.contains(sample.id)) {
+                                        selectedSampleIds - sample.id
+                                    } else {
+                                        selectedSampleIds + sample.id
+                                    }
+                                },
+                                onClickPreview = { previewSample = sample },
+                                onDelete = { viewModel.deleteSample(sample.id) }
+                            )
                         }
 
-                        // Bottom Pagination Controls (when dataset is split into multiple pages)
+                        // 4. Bottom Pagination Controls (when dataset is split into multiple pages)
                         if (totalPages > 1) {
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Row(
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .padding(top = 4.dp, bottom = 12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(12.dp)
                                 ) {
                                     Row(
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        IconButton(
-                                            onClick = { currentPage = 0 },
-                                            enabled = safeCurrentPage > 0,
-                                            modifier = Modifier.size(32.dp)
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(
-                                                Icons.Default.FirstPage,
-                                                contentDescription = "First Page",
-                                                modifier = Modifier.size(18.dp)
+                                            IconButton(
+                                                onClick = { currentPage = 0 },
+                                                enabled = safeCurrentPage > 0,
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.FirstPage,
+                                                    contentDescription = "First Page",
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            OutlinedButton(
+                                                onClick = { currentPage = (safeCurrentPage - 1).coerceAtLeast(0) },
+                                                enabled = safeCurrentPage > 0,
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                modifier = Modifier.height(32.dp)
+                                            ) {
+                                                Icon(Icons.Default.ChevronLeft, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text("Prev", fontSize = 11.sp)
+                                            }
+                                        }
+
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "Page ${safeCurrentPage + 1} of $totalPages",
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                             )
                                         }
-                                        OutlinedButton(
-                                            onClick = { currentPage = (safeCurrentPage - 1).coerceAtLeast(0) },
-                                            enabled = safeCurrentPage > 0,
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            modifier = Modifier.height(32.dp)
-                                        ) {
-                                            Icon(Icons.Default.ChevronLeft, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(2.dp))
-                                            Text("Prev", fontSize = 11.sp)
-                                        }
-                                    }
 
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Text(
-                                            text = "Page ${safeCurrentPage + 1} of $totalPages",
-                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                        )
-                                    }
-
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = { currentPage = (safeCurrentPage + 1).coerceAtMost(totalPages - 1) },
-                                            enabled = safeCurrentPage < totalPages - 1,
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            modifier = Modifier.height(32.dp)
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("Next", fontSize = 11.sp)
-                                            Spacer(modifier = Modifier.width(2.dp))
-                                            Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        }
-                                        IconButton(
-                                            onClick = { currentPage = totalPages - 1 },
-                                            enabled = safeCurrentPage < totalPages - 1,
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.LastPage,
-                                                contentDescription = "Last Page",
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                            OutlinedButton(
+                                                onClick = { currentPage = (safeCurrentPage + 1).coerceAtMost(totalPages - 1) },
+                                                enabled = safeCurrentPage < totalPages - 1,
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                modifier = Modifier.height(32.dp)
+                                            ) {
+                                                Text("Next", fontSize = 11.sp)
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            }
+                                            IconButton(
+                                                onClick = { currentPage = totalPages - 1 },
+                                                enabled = safeCurrentPage < totalPages - 1,
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.LastPage,
+                                                    contentDescription = "Last Page",
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -857,8 +904,10 @@ fun ClassProgressHeader(
     onAddFiles: () -> Unit,
     onAddCamera: () -> Unit,
     onEnrollFace: (() -> Unit)? = null,
-    onDeleteClass: () -> Unit
+    onDeleteClass: () -> Unit,
+    initiallyExpanded: Boolean = false
 ) {
+    var isExpanded by remember(classificationClass.id) { mutableStateOf(initiallyExpanded) }
     val recommendedMin = if (isFaceRecognition) 3 else 20
     val progress = (sampleCount.toFloat() / recommendedMin).coerceIn(0f, 1f)
 
@@ -867,9 +916,10 @@ fun ClassProgressHeader(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ),
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(14.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            // Header Row: Class info + Quick Action Buttons or Expand Toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -878,6 +928,7 @@ fun ClassProgressHeader(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .clickable { onEditClass() }
                         .padding(vertical = 4.dp)
                 ) {
@@ -895,7 +946,7 @@ fun ClassProgressHeader(
                     } else {
                         Box(
                             modifier = Modifier
-                                .size(16.dp)
+                                .size(14.dp)
                                 .clip(CircleShape)
                                 .background(
                                     try {
@@ -909,130 +960,216 @@ fun ClassProgressHeader(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = classificationClass.className,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1
                     )
                     Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = "$sampleCount",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            ),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.Edit,
-                        contentDescription = if (isFaceRecognition) "Edit Person Name" else "Edit Class Name",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+                        contentDescription = "Edit Name",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(16.dp)
                     )
                 }
 
-                IconButton(onClick = onDeleteClass) {
-                    Icon(
-                        Icons.Outlined.Delete,
-                        contentDescription = if (isFaceRecognition) "Delete Person" else "Delete Class",
-                        tint = MaterialTheme.colorScheme.error
+                // Quick Action buttons row when in compact mode
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    if (isFaceRecognition && onEnrollFace != null) {
+                        IconButton(
+                            onClick = onEnrollFace,
+                            modifier = Modifier
+                                .size(34.dp)
+                                .testTag("quick_face_scan_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.Face,
+                                contentDescription = "Face Lock Scan",
+                                tint = Color(0xFF0284C7),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onAddCamera,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("quick_camera_btn")
+                    ) {
+                        Icon(
+                            Icons.Default.CameraAlt,
+                            contentDescription = "Camera",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onAddGallery,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("quick_gallery_btn")
+                    ) {
+                        Icon(
+                            Icons.Default.PhotoLibrary,
+                            contentDescription = "Gallery",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onAddFiles,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("quick_files_btn")
+                    ) {
+                        Icon(
+                            Icons.Default.Folder,
+                            contentDescription = "Files",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { isExpanded = !isExpanded },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (isExpanded) "Collapse details" else "Expand details",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // Expanded Details Section
+            AnimatedVisibility(visible = isExpanded) {
+                Column(modifier = Modifier.padding(top = 8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (sampleCount >= recommendedMin)
+                                (if (isFaceRecognition) "Recommended face samples met! ($sampleCount)" else "Recommended sample size met! ($sampleCount)")
+                            else
+                                (if (isFaceRecognition) "Recommended: 1-3 face photos (have $sampleCount)" else "Recommended: 20+ images (have $sampleCount)"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (sampleCount >= recommendedMin) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        IconButton(onClick = onDeleteClass, modifier = Modifier.size(28.dp)) {
+                            Icon(
+                                Icons.Outlined.Delete,
+                                contentDescription = "Delete Class",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = if (sampleCount >= recommendedMin) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
                     )
-                }
-            }
 
-            Spacer(modifier = Modifier.height(8.dp))
+                    if (isFaceRecognition && onEnrollFace != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onEnrollFace,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = 42.dp)
+                                .testTag("face_enroll_header_btn"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF0284C7),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Face, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Face Lock Scan (হেড টার্ন বায়োমেট্রিক)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.5.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = if (isFaceRecognition) "$sampleCount face photos enrolled" else "$sampleCount images collected",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = if (sampleCount >= recommendedMin)
-                        (if (isFaceRecognition) "Recommended face samples met!" else "Recommended sample size met!")
-                    else
-                        (if (isFaceRecognition) "Recommended: 1-3 face photos" else "Recommended: 20+ images"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (sampleCount >= recommendedMin) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+                    Spacer(modifier = Modifier.height(8.dp))
 
-            Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = onAddGallery,
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 36.dp)
+                                .testTag("pick_gallery_btn"),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Gallery", fontSize = 11.5.sp, maxLines = 1)
+                        }
 
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp)),
-                color = if (sampleCount >= recommendedMin) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
-            )
+                        OutlinedButton(
+                            onClick = onAddFiles,
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 36.dp)
+                                .testTag("pick_files_btn"),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Files", fontSize = 11.5.sp, maxLines = 1)
+                        }
 
-            if (isFaceRecognition && onEnrollFace != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onEnrollFace,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 46.dp)
-                        .testTag("face_enroll_header_btn"),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF0284C7),
-                        contentColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Icon(Icons.Default.Face, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Face Lock Scan (হেড টার্ন বায়োমেট্রিক)",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onAddGallery,
-                    modifier = Modifier
-                        .weight(1f)
-                        .defaultMinSize(minHeight = 40.dp)
-                        .testTag("pick_gallery_btn"),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Gallery", fontSize = 12.sp, maxLines = 1)
-                }
-
-                OutlinedButton(
-                    onClick = onAddFiles,
-                    modifier = Modifier
-                        .weight(1f)
-                        .defaultMinSize(minHeight = 40.dp)
-                        .testTag("pick_files_btn"),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Files", fontSize = 12.sp, maxLines = 1)
-                }
-
-                OutlinedButton(
-                    onClick = onAddCamera,
-                    modifier = Modifier
-                        .weight(1f)
-                        .defaultMinSize(minHeight = 40.dp)
-                        .testTag("take_photo_btn"),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Camera", fontSize = 12.sp, maxLines = 1)
+                        OutlinedButton(
+                            onClick = onAddCamera,
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 36.dp)
+                                .testTag("take_photo_btn"),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Camera", fontSize = 11.5.sp, maxLines = 1)
+                        }
+                    }
                 }
             }
         }

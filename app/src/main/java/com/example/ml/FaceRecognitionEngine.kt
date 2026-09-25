@@ -1016,6 +1016,11 @@ class FaceRecognitionEngine(private val context: Context) {
                 confidence = bodyBox.confidence
             )
 
+            // Strictly filter out non-human or floral artifacts: verify head patch passes biometric anti-floral filter
+            if (!isBiometricFaceCandidate(sceneBitmap, estHeadBox)) {
+                continue
+            }
+
             val headEmb = extractFaceEmbedding(sceneBitmap, estHeadBox)
             val bodyEmb = extractBodyAppearanceEmbedding(sceneBitmap, bodyBox)
             val patchEmb = extractMultiPatchEmbedding(sceneBitmap, bodyBox)

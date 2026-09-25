@@ -1705,42 +1705,7 @@ fun BiometricFaceSettingsCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 5. Self-Correction & Centroid Repulsion Engine Details
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = null,
-                            tint = Color(0xFFEA580C),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "Self-Correction Engine (স্বয়ংক্রিয় ত্রুটি সংশোধন ও সেন্ট্রয়েড রিপালশন)",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Text(
-                                text = "মাল্টি-পাস ট্রেনিং সাইকেলে প্রতিটি ভুল মিল শনাক্ত করে হার্ড-নেগেটিভ মার্জিন রিপালশন (Margin = 0.35) প্রয়োগের মাধ্যমে ভিন্ন ব্যক্তির সেন্ট্রয়েডকে দূরে সরিয়ে দেয়।",
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // 6. Thermal & Battery Protection Switch
+            // 5. Thermal & Battery Protection Switch
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                 shape = RoundedCornerShape(10.dp),
@@ -2008,7 +1973,7 @@ fun BiometricAuditDetailsDialog(
 
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Anti-Floral Shield: Passed • Self-Correction Repulsion Margin: 0.35",
+                                    text = "Anti-Floral Shield: Passed • Biometric Filter Active",
                                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

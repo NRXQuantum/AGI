@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.Manifest
+import androidx.activity.compose.BackHandler
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -241,6 +242,18 @@ fun InferenceScreen(
     var showBodyContourOverlay by remember { mutableStateOf(true) }
     var showFacialMeshOverlay by remember { mutableStateOf(true) }
     var showEnlargedPhotoViewer by remember { mutableStateOf(false) }
+
+    BackHandler {
+        if (showLiveCameraViewfinder) {
+            showLiveCameraViewfinder = false
+        } else if (showCameraModeDialog) {
+            showCameraModeDialog = false
+        } else if (showEnlargedPhotoViewer) {
+            showEnlargedPhotoViewer = false
+        } else {
+            onNavigateBack?.invoke()
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(

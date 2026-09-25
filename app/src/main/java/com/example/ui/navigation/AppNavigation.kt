@@ -124,19 +124,23 @@ fun AppNavigation(viewModel: ProjectViewModel) {
                             val targetRoute = screen.route.replace("{projectId}", projId.toString())
                             val isSelected = currentRoute == screen.route
 
-                            NavigationBarItem(
-                                selected = isSelected,
-                                onClick = {
-                                    if (currentRoute != screen.route) {
-                                        navController.navigate(targetRoute) {
-                                            launchSingleTop = true
+                                NavigationBarItem(
+                                    selected = isSelected,
+                                    onClick = {
+                                        if (currentRoute != screen.route) {
+                                            navController.navigate(targetRoute) {
+                                                popUpTo("project/$projId/classes") {
+                                                    saveState = true
+                                                }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
                                         }
-                                    }
-                                },
-                                icon = screen.icon,
-                                label = { Text(screen.title) },
-                                modifier = Modifier.testTag("nav_${screen.title.lowercase()}")
-                            )
+                                    },
+                                    icon = screen.icon,
+                                    label = { Text(screen.title) },
+                                    modifier = Modifier.testTag("nav_${screen.title.lowercase()}")
+                                )
                         }
                     }
                 }
@@ -179,11 +183,16 @@ fun AppNavigation(viewModel: ProjectViewModel) {
                 ClassManagementScreen(
                     viewModel = viewModel,
                     onNavigateToTrain = {
-                        navController.navigate("project/$projectId/train")
+                        navController.navigate("project/$projectId/train") {
+                            popUpTo("project/$projectId/classes") { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     },
                     onNavigateBack = {
-                        if (!navController.popBackStack()) {
-                            navController.navigate(Screen.Projects.route)
+                        navController.navigate(Screen.Projects.route) {
+                            popUpTo(Screen.Projects.route) { inclusive = true }
+                            launchSingleTop = true
                         }
                     }
                 )
@@ -201,10 +210,18 @@ fun AppNavigation(viewModel: ProjectViewModel) {
                 TrainingScreen(
                     viewModel = viewModel,
                     onNavigateToTest = {
-                        navController.navigate("project/$projectId/test")
+                        navController.navigate("project/$projectId/test") {
+                            popUpTo("project/$projectId/classes") { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     },
                     onNavigateToExport = {
-                        navController.navigate("project/$projectId/export")
+                        navController.navigate("project/$projectId/export") {
+                            popUpTo("project/$projectId/classes") { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     }
                 )
             }
@@ -221,13 +238,24 @@ fun AppNavigation(viewModel: ProjectViewModel) {
                 InferenceScreen(
                     viewModel = viewModel,
                     onNavigateToExport = {
-                        navController.navigate("project/$projectId/export")
+                        navController.navigate("project/$projectId/export") {
+                            popUpTo("project/$projectId/classes") { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     },
                     onNavigateToTrain = {
-                        navController.navigate("project/$projectId/train")
+                        navController.navigate("project/$projectId/train") {
+                            popUpTo("project/$projectId/classes") { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     },
                     onNavigateBack = {
-                        navController.popBackStack()
+                        navController.navigate(Screen.Projects.route) {
+                            popUpTo(Screen.Projects.route) { inclusive = true }
+                            launchSingleTop = true
+                        }
                     }
                 )
             }
