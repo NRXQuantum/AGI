@@ -338,6 +338,7 @@ class ProjectRepository(
         val overallStartMs = System.currentTimeMillis()
         val project = dao.getProjectByIdDirect(projectId)
         val isFaceMode = (project?.projectType == "FACE_RECOGNITION")
+        val isTextMode = (project?.projectType == "TEXT_CLASSIFICATION")
 
         val classes = dao.getClassesForProjectDirect(projectId)
         if (classes.size < 2) {
@@ -347,9 +348,162 @@ class ProjectRepository(
                     totalEpochs = epochs,
                     loss = 0f,
                     accuracy = 0f,
-                    statusMessage = if (isFaceMode) "Error: At least 2 persons required to train face recognition model (e.g. Person A, Person B)." else "Error: At least 2 classes are required for image classification training.",
+                    statusMessage = when {
+                        isFaceMode -> "Error: At least 2 persons required to train face recognition model."
+                        isTextMode -> "Error: At least 2 classes are required to train text model (e.g., Positive, Negative)."
+                        else -> "Error: At least 2 classes are required for image classification training."
+                    },
                     overallPercentage = 0f,
                     phase = TrainingPhase.ERROR
+                )
+            )
+            return@withContext
+        }
+
+        if (isTextMode) {
+            val allTextSamples = dao.getAllTextSamplesForProjectDirect(projectId)
+            if (allTextSamples.isEmpty()) {
+                onProgress(
+                    TrainingProgress(
+                        currentEpoch = 0,
+                        totalEpochs = epochs,
+                        loss = 0f,
+                        accuracy = 0f,
+                        statusMessage = "Error: No text samples found across classes. Add at least a few text samples to each class.",
+                        overallPercentage = 0f,
+                        phase = TrainingPhase.ERROR
+                    )
+                )
+                return@withContext
+            }
+
+            val totalTextSamples = allTextSamples.size
+            onProgress(
+                TrainingProgress(
+                    currentEpoch = 0,
+                    totalEpochs = epochs,
+                    loss = 0f,
+                    accuracy = 0f,
+                    statusMessage = "Analyzing & tokenizing $totalTextSamples text samples with 3-Expert MoE...",
+                    overallPercentage = 5f,
+                    phase = TrainingPhase.EXTRACTING_FEATURES,
+                    currentStep = 0,
+                    totalSteps = totalTextSamples,
+                    elapsedSeconds = 0L,
+                    estimatedRemainingSeconds = 1L,
+                    speedText = "Tokenizing"
+                )
+            )
+
+            val classMap = classes.mapIndexed { idx, c -> c.id to Pair(idx, c.className) }.toMap()
+            val trainingSamples = mutableListOf<TrainingSample>()
+
+            for (sample in allTextSamples) {
+                val classInfo = classMap[sample.classId] ?: continue
+                val features = TextModelEngine.extractTextFeatures(sample.textContent)
+                trainingSamples.add(TrainingSample(features, classInfo.first, classInfo.second))
+            }
+
+            if (trainingSamples.isEmpty()) {
+                onProgress(
+                    TrainingProgress(
+                        currentEpoch = 0,
+                        totalEpochs = epochs,
+                        loss = 0f,
+                        accuracy = 0f,
+                        statusMessage = "Error: Could not extract features from text samples.",
+                        overallPercentage = 0f,
+                        phase = TrainingPhase.ERROR
+                    )
+                )
+                return@withContext
+            }
+
+            val classLabels = classes.map { it.className }
+            val trainer = OnDeviceTrainer(
+                numClasses = classes.size,
+                featureDim = TextModelEngine.FEATURE_DIM,
+                classLabels = classLabels,
+                architecture = architecture
+            )
+
+            var finalLoss = 0f
+            var finalAccuracy = 0f
+
+            trainer.train(
+                samples = trainingSamples,
+                epochs = epochs,
+                learningRate = learningRate,
+                batchSize = batchSize,
+                architecture = architecture,
+                optimizerType = optimizerType,
+                lrSchedule = lrSchedule,
+                deviceProtectionEnabled = deviceProtectionEnabled,
+                overallStartMs = overallStartMs,
+                onProgress = { progress ->
+                    finalLoss = progress.loss
+                    finalAccuracy = progress.accuracy
+                    onProgress(progress)
+                }
+            )
+
+            onProgress(
+                TrainingProgress(
+                    currentEpoch = epochs,
+                    totalEpochs = epochs,
+                    loss = finalLoss,
+                    accuracy = finalAccuracy,
+                    statusMessage = "Saving optimized text model weights...",
+                    overallPercentage = 99.5f,
+                    phase = TrainingPhase.FINALIZING_MODEL,
+                    currentStep = epochs,
+                    totalSteps = epochs,
+                    elapsedSeconds = (System.currentTimeMillis() - overallStartMs) / 1000L,
+                    estimatedRemainingSeconds = 0L,
+                    speedText = "Saving"
+                )
+            )
+
+            val modelsDir = File(context.filesDir, "trained_models").apply { mkdirs() }
+            val weightsFile = File(modelsDir, "project_${projectId}_weights.json")
+            weightsFile.writeText(trainer.exportWeightsJson(), Charsets.UTF_8)
+
+            val modelEntity = TrainedModelEntity(
+                projectId = projectId,
+                numClasses = classes.size,
+                featureDim = TextModelEngine.FEATURE_DIM,
+                weightsJson = "file:${weightsFile.absolutePath}",
+                biasJson = trainer.exportBiasesJson(),
+                classLabelsJson = trainer.exportLabelsJson(),
+                accuracy = finalAccuracy,
+                featureScaleMeansJson = trainer.exportScaleMeansJson(),
+                featureScaleStdsJson = trainer.exportScaleStdsJson()
+            )
+            dao.insertTrainedModel(modelEntity)
+
+            val currentProj = dao.getProjectByIdDirect(projectId)
+            if (currentProj != null) {
+                dao.updateProject(
+                    currentProj.copy(
+                        isTrained = true,
+                        trainedAt = System.currentTimeMillis(),
+                        trainingAccuracy = finalAccuracy,
+                        trainingEpochs = epochs,
+                        learningRate = learningRate,
+                        batchSize = batchSize
+                    )
+                )
+            }
+
+            onProgress(
+                TrainingProgress(
+                    currentEpoch = epochs,
+                    totalEpochs = epochs,
+                    loss = finalLoss,
+                    accuracy = finalAccuracy,
+                    statusMessage = "Text NLP Model Training Complete! Accuracy: ${String.format(Locale.US, "%.1f%%", finalAccuracy * 100f)}",
+                    overallPercentage = 100f,
+                    phase = TrainingPhase.COMPLETED
                 )
             )
             return@withContext
@@ -1530,5 +1684,134 @@ class ProjectRepository(
 
     suspend fun getAllDirectSamples(projectId: Long): List<ImageSampleEntity> = withContext(Dispatchers.IO) {
         dao.getAllSamplesForProjectDirect(projectId)
+    }
+
+    // Text Samples Operations
+    fun getTextSamplesForClass(classId: Long): Flow<List<TextSampleEntity>> =
+        dao.getTextSamplesForClass(classId)
+
+    suspend fun getAllTextSamplesForProjectDirect(projectId: Long): List<TextSampleEntity> = withContext(Dispatchers.IO) {
+        dao.getAllTextSamplesForProjectDirect(projectId)
+    }
+
+    fun getTotalTextSampleCountForProject(projectId: Long): Flow<Int> =
+        dao.getTotalTextSampleCountForProject(projectId)
+
+    fun getTextSampleCountForClass(classId: Long): Flow<Int> =
+        dao.getTextSampleCountForClass(classId)
+
+    suspend fun addTextSample(classId: Long, projectId: Long, text: String, maxTokens: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT): Long = withContext(Dispatchers.IO) {
+        val tokenRes = TextModelEngine.tokenize(text, maxTokens)
+        val sample = TextSampleEntity(
+            classId = classId,
+            projectId = projectId,
+            textContent = text.trim(),
+            tokenCount = tokenRes.tokenCount
+        )
+        dao.insertTextSample(sample)
+    }
+
+    suspend fun addTextSamplesBatch(classId: Long, projectId: Long, texts: List<String>, maxTokens: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) = withContext(Dispatchers.IO) {
+        val samples = texts.filter { it.isNotBlank() }.map { t ->
+            val tokenRes = TextModelEngine.tokenize(t, maxTokens)
+            TextSampleEntity(
+                classId = classId,
+                projectId = projectId,
+                textContent = t.trim(),
+                tokenCount = tokenRes.tokenCount
+            )
+        }
+        if (samples.isNotEmpty()) {
+            dao.insertTextSamplesBatch(samples)
+        }
+    }
+
+    suspend fun updateTextSample(sampleId: Long, classId: Long, projectId: Long, newText: String, maxTokens: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) = withContext(Dispatchers.IO) {
+        val tokenRes = TextModelEngine.tokenize(newText, maxTokens)
+        val updated = TextSampleEntity(
+            id = sampleId,
+            classId = classId,
+            projectId = projectId,
+            textContent = newText.trim(),
+            tokenCount = tokenRes.tokenCount
+        )
+        dao.updateTextSample(updated)
+    }
+
+    suspend fun deleteTextSample(sampleId: Long) = withContext(Dispatchers.IO) {
+        dao.deleteTextSampleById(sampleId)
+    }
+
+    suspend fun updateTextSampleClass(sampleId: Long, newClassId: Long) = withContext(Dispatchers.IO) {
+        dao.updateTextSampleClass(sampleId, newClassId)
+    }
+
+    suspend fun loadBenchmarkDataset(projectId: Long, dataset: TextModelEngine.PreloadedDataset) = withContext(Dispatchers.IO) {
+        for (c in dataset.classes) {
+            val classId = dao.insertClass(
+                ClassificationClassEntity(
+                    projectId = projectId,
+                    className = c.name,
+                    colorHex = c.colorHex
+                )
+            )
+            val samples = c.samples.map { text ->
+                val tokenRes = TextModelEngine.tokenize(text)
+                TextSampleEntity(
+                    classId = classId,
+                    projectId = projectId,
+                    textContent = text.trim(),
+                    tokenCount = tokenRes.tokenCount
+                )
+            }
+            dao.insertTextSamplesBatch(samples)
+        }
+    }
+
+    suspend fun predictText(
+        projectId: Long,
+        text: String,
+        tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT
+    ): TextModelEngine.TextPrediction = withContext(Dispatchers.Default) {
+        val startMs = System.currentTimeMillis()
+        val model = dao.getLatestTrainedModelDirect(projectId)
+            ?: return@withContext TextModelEngine.TextPrediction(
+                classIndex = -1,
+                classLabel = "No Model",
+                confidence = 0f,
+                allProbabilities = emptyList(),
+                inferenceTimeMs = 0L,
+                tokenCount = 0,
+                tokenLimit = tokenLimit,
+                salientTokens = emptyList(),
+                energyMicroJoules = 0f
+            )
+
+        val trainer = getOrLoadTrainer(model, projectId)
+        val tokenRes = TextModelEngine.tokenize(text, tokenLimit)
+        val rawFeatures = TextModelEngine.extractTextFeatures(text, tokenLimit)
+
+        val predResult = trainer.predict(rawFeatures)
+        val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+
+        // Compute Explainability: top salient words/tokens
+        val salient = if (predResult.classIndex in 0 until model.numClasses && predResult.classIndex < trainer.weights.size) {
+            val wSlice = trainer.weights[predResult.classIndex]
+            TextModelEngine.computeSalientTokens(tokenRes.tokens, wSlice)
+        } else emptyList()
+
+        val energyUj = (0.8f * (elapsedMs / 1000f) * 1_000_000f).coerceAtLeast(10f)
+
+        TextModelEngine.TextPrediction(
+            classIndex = predResult.classIndex,
+            classLabel = predResult.classLabel,
+            confidence = predResult.confidence,
+            allProbabilities = predResult.allProbabilities,
+            inferenceTimeMs = elapsedMs,
+            tokenCount = tokenRes.tokenCount,
+            tokenLimit = tokenLimit,
+            salientTokens = salient,
+            energyMicroJoules = energyUj
+        )
     }
 }

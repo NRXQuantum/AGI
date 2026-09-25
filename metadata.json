@@ -1,6 +1,6 @@
 {
   "name": "Model Trainer",
-  "description": "Train custom image classification and biometric face recognition models completely on-device with Deep Residual MLP, AdamW, centroid face matching, live camera testing, and model export.",
+  "description": "Train custom image classification, biometric face recognition, and text NLP models completely on-device with Deep Residual MLP, AdamW, centroid face matching, live camera & text testing, and model export.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

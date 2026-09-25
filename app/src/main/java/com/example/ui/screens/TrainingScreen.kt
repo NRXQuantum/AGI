@@ -64,6 +64,7 @@ fun TrainingScreen(
     val totalSamples by viewModel.projectTotalSamples.collectAsState()
     val configVersion by viewModel.configVersion.collectAsState()
     val isFaceMode = project?.projectType == "FACE_RECOGNITION"
+    val isTextMode = project?.projectType == "TEXT_CLASSIFICATION"
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -211,11 +212,14 @@ fun TrainingScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    val isFaceMode = project?.projectType == "FACE_RECOGNITION"
                     Column(verticalArrangement = Arrangement.Center) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = if (isFaceMode) "Person & Human Identification Trainer" else "On-Device Trainer",
+                                text = when {
+                                    isFaceMode -> "Person & Human Identification Trainer"
+                                    isTextMode -> "Text & NLP Model Trainer"
+                                    else -> "On-Device Trainer"
+                                },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             if (isTraining) {
@@ -244,7 +248,11 @@ fun TrainingScreen(
                             }
                         }
                         Text(
-                            text = project?.name ?: (if (isFaceMode) "Multi-Modal Hybrid Re-ID (Face + Full Body + Patches)" else "Model Personalization"),
+                            text = project?.name ?: when {
+                                isFaceMode -> "Multi-Modal Hybrid Re-ID (Face + Full Body + Patches)"
+                                isTextMode -> "3-Expert MoE • Dense Embeddings • On-Device NLP"
+                                else -> "Model Personalization"
+                            },
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -461,7 +469,7 @@ fun TrainingScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = if (canTrain) (if (isFaceMode) Icons.Default.Face else Icons.Default.CheckCircle) else Icons.Default.Warning,
+                                imageVector = if (canTrain) (if (isFaceMode) Icons.Default.Face else if (isTextMode) Icons.Default.TextFields else Icons.Default.CheckCircle) else Icons.Default.Warning,
                                 contentDescription = null,
                                 tint = if (canTrain) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
                                 modifier = Modifier.size(20.dp)
@@ -470,20 +478,34 @@ fun TrainingScreen(
                             Column {
                                 Text(
                                     text = if (canTrain) {
-                                        if (isFaceMode) "Ready to Calibrate Human Biometrics" else "Ready to Train On-Device"
+                                        when {
+                                            isFaceMode -> "Ready to Calibrate Human Biometrics"
+                                            isTextMode -> "Ready to Train Text NLP Model"
+                                            else -> "Ready to Train On-Device"
+                                        }
                                     } else {
-                                        if (isFaceMode) "Biometric Dataset Incomplete" else "Dataset Incomplete"
+                                        when {
+                                            isFaceMode -> "Biometric Dataset Incomplete"
+                                            isTextMode -> "Text Dataset Incomplete"
+                                            else -> "Dataset Incomplete"
+                                        }
                                     },
                                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                     color = if (canTrain) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer
                                 )
                                 Text(
                                     text = if (canTrain) {
-                                        if (isFaceMode) "$numClasses individuals enrolled. Face, body & patch alignment ready."
-                                        else "$numClasses categories loaded. Feature scaling & SGD ready."
+                                        when {
+                                            isFaceMode -> "$numClasses individuals enrolled. Face, body & patch alignment ready."
+                                            isTextMode -> "$numClasses text categories loaded. 3-Expert MoE ready."
+                                            else -> "$numClasses categories loaded. Feature scaling & SGD ready."
+                                        }
                                     } else {
-                                        if (isFaceMode) "At least 2 individuals required (e.g. Person A, Person B). Please enroll photos in Dataset tab."
-                                        else "At least 2 categories required. Please add images in Dataset tab."
+                                        when {
+                                            isFaceMode -> "At least 2 individuals required (e.g. Person A, Person B). Please enroll photos in Dataset tab."
+                                            isTextMode -> "At least 2 classes and text samples required. Please add samples in Dataset tab."
+                                            else -> "At least 2 categories required. Please add images in Dataset tab."
+                                        }
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (canTrain) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer
@@ -624,9 +646,16 @@ fun TrainingScreen(
                                             ),
                                             contentPadding = PaddingValues(horizontal = 8.dp)
                                         ) {
-                                            Icon(if (isFaceMode) Icons.Default.Face else Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(if (isFaceMode) Icons.Default.Face else if (isTextMode) Icons.Default.TextFields else Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text(if (isFaceMode) "Test Human ID" else "Test Model", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                            Text(
+                                                when {
+                                                    isFaceMode -> "Test Human ID"
+                                                    isTextMode -> "Test NLP Model"
+                                                    else -> "Test Model"
+                                                },
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                            )
                                         }
 
                                         Button(
@@ -686,13 +715,21 @@ fun TrainingScreen(
                                 containerColor = MaterialTheme.colorScheme.primary
                             )
                         ) {
-                            Icon(if (isFaceMode) Icons.Default.Face else Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Icon(if (isFaceMode) Icons.Default.Face else if (isTextMode) Icons.Default.TextFields else Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (latestModel != null) {
-                                    if (isFaceMode) "Re-Calibrate Person Biometrics" else "Re-Train Model On-Device"
+                                    when {
+                                        isFaceMode -> "Re-Calibrate Person Biometrics"
+                                        isTextMode -> "Re-Train Text NLP Model"
+                                        else -> "Re-Train Model On-Device"
+                                    }
                                 } else {
-                                    if (isFaceMode) "Calibrate Person & Face Embeddings" else "Start On-Device Training"
+                                    when {
+                                        isFaceMode -> "Calibrate Person & Face Embeddings"
+                                        isTextMode -> "Start Text NLP Training"
+                                        else -> "Start On-Device Training"
+                                    }
                                 },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )

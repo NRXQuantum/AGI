@@ -84,6 +84,19 @@ fun InferenceScreen(
     val faceMatchThreshold by viewModel.faceMatchThreshold.collectAsState()
     val isFaceMode = project?.projectType == "FACE_RECOGNITION"
 
+    if (project?.projectType == "TEXT_CLASSIFICATION") {
+        com.example.ui.components.TextInferenceStudio(
+            viewModel = viewModel,
+            project = project!!,
+            latestModel = latestModel,
+            classes = classes,
+            onNavigateToTrain = onNavigateToTrain,
+            onNavigateToExport = onNavigateToExport,
+            onNavigateBack = onNavigateBack
+        )
+        return
+    }
+
     var testBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var feedbackSubmittedForCurrentPhoto by remember { mutableStateOf<String?>(null) }
     var feedbackStatusMessage by remember { mutableStateOf<String?>(null) }

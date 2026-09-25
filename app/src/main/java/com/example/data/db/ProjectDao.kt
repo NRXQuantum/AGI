@@ -73,6 +73,37 @@ interface ProjectDao {
     @Query("SELECT COUNT(*) FROM image_samples WHERE projectId = :projectId")
     fun getTotalSampleCountForProject(projectId: Long): Flow<Int>
 
+    // Text Samples
+    @Query("SELECT * FROM text_samples WHERE classId = :classId ORDER BY createdAt DESC")
+    fun getTextSamplesForClass(classId: Long): Flow<List<TextSampleEntity>>
+
+    @Query("SELECT * FROM text_samples WHERE projectId = :projectId")
+    suspend fun getAllTextSamplesForProjectDirect(projectId: Long): List<TextSampleEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTextSample(sample: TextSampleEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTextSamplesBatch(samples: List<TextSampleEntity>)
+
+    @Update
+    suspend fun updateTextSample(sample: TextSampleEntity)
+
+    @Delete
+    suspend fun deleteTextSample(sample: TextSampleEntity)
+
+    @Query("DELETE FROM text_samples WHERE id = :sampleId")
+    suspend fun deleteTextSampleById(sampleId: Long)
+
+    @Query("UPDATE text_samples SET classId = :newClassId WHERE id = :sampleId")
+    suspend fun updateTextSampleClass(sampleId: Long, newClassId: Long)
+
+    @Query("SELECT COUNT(*) FROM text_samples WHERE classId = :classId")
+    fun getTextSampleCountForClass(classId: Long): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM text_samples WHERE projectId = :projectId")
+    fun getTotalTextSampleCountForProject(projectId: Long): Flow<Int>
+
     // Trained Models
     @Query("SELECT * FROM trained_models WHERE projectId = :projectId ORDER BY trainedAt DESC LIMIT 1")
     fun getLatestTrainedModel(projectId: Long): Flow<TrainedModelEntity?>

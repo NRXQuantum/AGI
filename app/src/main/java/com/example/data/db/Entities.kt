@@ -89,3 +89,26 @@ data class TrainedModelEntity(
     val featureScaleMeansJson: String = "[]",
     val featureScaleStdsJson: String = "[]"
 )
+
+@Entity(
+    tableName = "text_samples",
+    foreignKeys = [
+        ForeignKey(
+            entity = ClassificationClassEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["classId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("classId"), Index("projectId")]
+)
+data class TextSampleEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val classId: Long,
+    val projectId: Long,
+    val textContent: String,
+    val tokenCount: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
+)
+

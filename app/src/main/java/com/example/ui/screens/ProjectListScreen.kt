@@ -47,10 +47,10 @@ fun ProjectListScreen(
     val filteredProjects = remember(projects, currentMode, showAllModes) {
         if (showAllModes) {
             projects
-        } else if (currentMode == AppMode.FACE_RECOGNITION) {
-            projects.filter { it.projectType == "FACE_RECOGNITION" }
-        } else {
-            projects.filter { it.projectType != "FACE_RECOGNITION" }
+        } else when (currentMode) {
+            AppMode.FACE_RECOGNITION -> projects.filter { it.projectType == "FACE_RECOGNITION" }
+            AppMode.TEXT_CLASSIFICATION -> projects.filter { it.projectType == "TEXT_CLASSIFICATION" }
+            else -> projects.filter { it.projectType != "FACE_RECOGNITION" && it.projectType != "TEXT_CLASSIFICATION" }
         }
     }
 
@@ -130,22 +130,32 @@ fun ProjectListScreen(
                         SegmentedButton(
                             selected = currentMode == AppMode.IMAGE_CLASSIFICATION,
                             onClick = { viewModel.setAppMode(AppMode.IMAGE_CLASSIFICATION) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
                             icon = {
-                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(15.dp))
                             }
                         ) {
-                            Text("Normal Images", maxLines = 1, fontSize = 13.sp)
+                            Text("Images", maxLines = 1, fontSize = 12.sp)
                         }
                         SegmentedButton(
                             selected = currentMode == AppMode.FACE_RECOGNITION,
                             onClick = { viewModel.setAppMode(AppMode.FACE_RECOGNITION) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
                             icon = {
-                                Icon(Icons.Default.Face, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Face, contentDescription = null, modifier = Modifier.size(15.dp))
                             }
                         ) {
-                            Text("Person / Face ID", maxLines = 1, fontSize = 13.sp)
+                            Text("Face ID", maxLines = 1, fontSize = 12.sp)
+                        }
+                        SegmentedButton(
+                            selected = currentMode == AppMode.TEXT_CLASSIFICATION,
+                            onClick = { viewModel.setAppMode(AppMode.TEXT_CLASSIFICATION) },
+                            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                            icon = {
+                                Icon(Icons.Default.TextFields, contentDescription = null, modifier = Modifier.size(15.dp))
+                            }
+                        ) {
+                            Text("Text NLP", maxLines = 1, fontSize = 12.sp)
                         }
                     }
 
@@ -155,10 +165,11 @@ fun ProjectListScreen(
                             .fillMaxWidth()
                             .padding(vertical = 8.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = if (currentMode == AppMode.FACE_RECOGNITION)
-                                Color(0xFF0284C7).copy(alpha = 0.14f)
-                            else
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
+                            containerColor = when (currentMode) {
+                                AppMode.FACE_RECOGNITION -> Color(0xFF0284C7).copy(alpha = 0.14f)
+                                AppMode.TEXT_CLASSIFICATION -> Color(0xFF10B981).copy(alpha = 0.14f)
+                                else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
+                            }
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
@@ -173,18 +184,20 @@ fun ProjectListScreen(
                                     .size(46.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (currentMode == AppMode.FACE_RECOGNITION)
-                                            Color(0xFF0284C7)
-                                        else
-                                            MaterialTheme.colorScheme.primary
+                                        when (currentMode) {
+                                            AppMode.FACE_RECOGNITION -> Color(0xFF0284C7)
+                                            AppMode.TEXT_CLASSIFICATION -> Color(0xFF10B981)
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = if (currentMode == AppMode.FACE_RECOGNITION)
-                                        Icons.Default.Face
-                                    else
-                                        Icons.Default.Psychology,
+                                    imageVector = when (currentMode) {
+                                        AppMode.FACE_RECOGNITION -> Icons.Default.Face
+                                        AppMode.TEXT_CLASSIFICATION -> Icons.Default.TextFields
+                                        else -> Icons.Default.Psychology
+                                    },
                                     contentDescription = null,
                                     tint = Color.White,
                                     modifier = Modifier.size(26.dp)
@@ -193,28 +206,32 @@ fun ProjectListScreen(
                             Spacer(modifier = Modifier.width(14.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (currentMode == AppMode.FACE_RECOGNITION)
-                                        "100% On-Device Face Recognition"
-                                    else
-                                        "100% On-Device Neural Training",
+                                    text = when (currentMode) {
+                                        AppMode.FACE_RECOGNITION -> "100% On-Device Face Recognition"
+                                        AppMode.TEXT_CLASSIFICATION -> "100% On-Device Text & NLP Training"
+                                        else -> "100% On-Device Neural Training"
+                                    },
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.Bold
                                     ),
-                                    color = if (currentMode == AppMode.FACE_RECOGNITION)
-                                        Color(0xFF0369A1)
-                                    else
-                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    color = when (currentMode) {
+                                        AppMode.FACE_RECOGNITION -> Color(0xFF0369A1)
+                                        AppMode.TEXT_CLASSIFICATION -> Color(0xFF065F46)
+                                        else -> MaterialTheme.colorScheme.onPrimaryContainer
+                                    }
                                 )
                                 Text(
-                                    text = if (currentMode == AppMode.FACE_RECOGNITION)
-                                        "Recognize specific individuals (Person A, Person B). Train biometrics from 1-3 photos per person with instant calibration."
-                                    else
-                                        "Train custom vision models locally & export to TFLite, ONNX, CoreML, and SavedModel.",
+                                    text = when (currentMode) {
+                                        AppMode.FACE_RECOGNITION -> "Recognize specific individuals (Person A, Person B). Train biometrics from 1-3 photos per person with instant calibration."
+                                        AppMode.TEXT_CLASSIFICATION -> "Ultra-low-energy 3-Expert MoE on-device NLP. Train sentiment, spam filters, customer support routing & custom text models in seconds!"
+                                        else -> "Train custom vision models locally & export to TFLite, ONNX, CoreML, and SavedModel."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (currentMode == AppMode.FACE_RECOGNITION)
-                                        Color(0xFF0369A1).copy(alpha = 0.85f)
-                                    else
-                                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    color = when (currentMode) {
+                                        AppMode.FACE_RECOGNITION -> Color(0xFF0369A1).copy(alpha = 0.85f)
+                                        AppMode.TEXT_CLASSIFICATION -> Color(0xFF047857)
+                                        else -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    }
                                 )
                             }
                         }
@@ -236,10 +253,11 @@ fun ProjectListScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (currentMode == AppMode.FACE_RECOGNITION)
-                                    "Face ID Projects (${filteredProjects.size})"
-                                else
-                                    "Image Classification Projects (${filteredProjects.size})",
+                                text = when (currentMode) {
+                                    AppMode.FACE_RECOGNITION -> "Face ID Projects (${filteredProjects.size})"
+                                    AppMode.TEXT_CLASSIFICATION -> "Text NLP Projects (${filteredProjects.size})"
+                                    else -> "Image Classification Projects (${filteredProjects.size})"
+                                },
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -354,6 +372,32 @@ fun ProjectItemCard(
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF0284C7)
+                                        )
+                                    )
+                                }
+                            }
+                        } else if (project.projectType == "TEXT_CLASSIFICATION") {
+                            Surface(
+                                color = Color(0xFF10B981).copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.TextFields,
+                                        contentDescription = null,
+                                        tint = Color(0xFF059669),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "TEXT NLP",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF059669)
                                         )
                                     )
                                 }
@@ -567,28 +611,35 @@ fun EmptyProjectsView(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
-            imageVector = if (currentMode == AppMode.FACE_RECOGNITION) Icons.Default.Face else Icons.Outlined.FolderOpen,
+            imageVector = when (currentMode) {
+                AppMode.FACE_RECOGNITION -> Icons.Default.Face
+                AppMode.TEXT_CLASSIFICATION -> Icons.Default.TextFields
+                else -> Icons.Outlined.FolderOpen
+            },
             contentDescription = null,
             modifier = Modifier.size(72.dp),
-            tint = if (currentMode == AppMode.FACE_RECOGNITION)
-                Color(0xFF0284C7).copy(alpha = 0.7f)
-            else
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            tint = when (currentMode) {
+                AppMode.FACE_RECOGNITION -> Color(0xFF0284C7).copy(alpha = 0.7f)
+                AppMode.TEXT_CLASSIFICATION -> Color(0xFF10B981).copy(alpha = 0.7f)
+                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            }
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = if (currentMode == AppMode.FACE_RECOGNITION)
-                "No Face ID Projects Yet"
-            else
-                "No Classification Projects",
+            text = when (currentMode) {
+                AppMode.FACE_RECOGNITION -> "No Face ID Projects Yet"
+                AppMode.TEXT_CLASSIFICATION -> "No Text NLP Projects Yet"
+                else -> "No Classification Projects"
+            },
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = if (currentMode == AppMode.FACE_RECOGNITION)
-                "Create your first biometric project to enroll individuals (Person A, Person B, etc.) with 1-3 photos and recognize them in real time."
-            else
-                "Create your first project to collect training images, train custom neural models on-device, and export them.",
+            text = when (currentMode) {
+                AppMode.FACE_RECOGNITION -> "Create your first biometric project to enroll individuals (Person A, Person B, etc.) with 1-3 photos and recognize them in real time."
+                AppMode.TEXT_CLASSIFICATION -> "Create your first Text NLP project to train custom on-device sentiment analysis, spam filters, intent routing, or document classifiers in seconds."
+                else -> "Create your first project to collect training images, train custom neural models on-device, and export them."
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 24.dp)
@@ -602,10 +653,11 @@ fun EmptyProjectsView(
             Icon(Icons.Default.Add, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                if (currentMode == AppMode.FACE_RECOGNITION)
-                    "Create Face ID Project"
-                else
-                    "Create Classification Project"
+                when (currentMode) {
+                    AppMode.FACE_RECOGNITION -> "Create Face ID Project"
+                    AppMode.TEXT_CLASSIFICATION -> "Create Text NLP Project"
+                    else -> "Create Classification Project"
+                }
             )
         }
     }
@@ -624,7 +676,13 @@ fun CreateProjectDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(if (selectedMode == AppMode.FACE_RECOGNITION) "New Face / Person Project" else "New Vision Project")
+            Text(
+                when (selectedMode) {
+                    AppMode.FACE_RECOGNITION -> "New Face / Person Project"
+                    AppMode.TEXT_CLASSIFICATION -> "New Text & NLP Project"
+                    else -> "New Vision Project"
+                }
+            )
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -632,7 +690,7 @@ fun CreateProjectDialog(
                     SegmentedButton(
                         selected = selectedMode == AppMode.IMAGE_CLASSIFICATION,
                         onClick = { selectedMode = AppMode.IMAGE_CLASSIFICATION },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
                         icon = {
                             Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(14.dp))
                         }
@@ -642,12 +700,22 @@ fun CreateProjectDialog(
                     SegmentedButton(
                         selected = selectedMode == AppMode.FACE_RECOGNITION,
                         onClick = { selectedMode = AppMode.FACE_RECOGNITION },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
                         icon = {
                             Icon(Icons.Default.Face, contentDescription = null, modifier = Modifier.size(14.dp))
                         }
                     ) {
                         Text("Face ID", fontSize = 12.sp)
+                    }
+                    SegmentedButton(
+                        selected = selectedMode == AppMode.TEXT_CLASSIFICATION,
+                        onClick = { selectedMode = AppMode.TEXT_CLASSIFICATION },
+                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                        icon = {
+                            Icon(Icons.Default.TextFields, contentDescription = null, modifier = Modifier.size(14.dp))
+                        }
+                    ) {
+                        Text("Text NLP", fontSize = 12.sp)
                     }
                 }
 
@@ -656,7 +724,13 @@ fun CreateProjectDialog(
                     onValueChange = { name = it },
                     label = { Text("Project Name") },
                     placeholder = {
-                        Text(if (selectedMode == AppMode.FACE_RECOGNITION) "e.g., Office Team, My Family" else "e.g., Plant Disease Classifier")
+                        Text(
+                            when (selectedMode) {
+                                AppMode.FACE_RECOGNITION -> "e.g., Office Team, My Family"
+                                AppMode.TEXT_CLASSIFICATION -> "e.g., Sentiment Analyzer, Spam Guard"
+                                else -> "e.g., Plant Disease Classifier"
+                            }
+                        )
                     },
                     singleLine = true,
                     modifier = Modifier
@@ -668,7 +742,13 @@ fun CreateProjectDialog(
                     onValueChange = { description = it },
                     label = { Text("Description (Optional)") },
                     placeholder = {
-                        Text(if (selectedMode == AppMode.FACE_RECOGNITION) "e.g., Identify friends and family members" else "e.g., Detect leaf diseases on tomato plants")
+                        Text(
+                            when (selectedMode) {
+                                AppMode.FACE_RECOGNITION -> "e.g., Identify friends and family members"
+                                AppMode.TEXT_CLASSIFICATION -> "e.g., Classify reviews into Positive / Negative"
+                                else -> "e.g., Detect leaf diseases on tomato plants"
+                            }
+                        )
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -678,10 +758,11 @@ fun CreateProjectDialog(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = if (selectedMode == AppMode.FACE_RECOGNITION)
-                            "💡 Creates 'Person A' and 'Person B' by default. Needs 1-3 face photos per person for instant on-device recognition."
-                        else
-                            "💡 Creates 'Class A' and 'Class B' by default for multi-class image classification.",
+                        text = when (selectedMode) {
+                            AppMode.FACE_RECOGNITION -> "💡 Creates 'Person A' and 'Person B' by default. Needs 1-3 face photos per person for instant on-device recognition."
+                            AppMode.TEXT_CLASSIFICATION -> "⚡ Ultra-low-energy 3-Expert MoE on-device embeddings with automatic token budgeting. Train custom NLP in seconds!"
+                            else -> "💡 Creates 'Class A' and 'Class B' by default for multi-class image classification."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(10.dp)
@@ -696,14 +777,24 @@ fun CreateProjectDialog(
                         onCreate(
                             name.trim(),
                             description.trim(),
-                            if (selectedMode == AppMode.FACE_RECOGNITION) "FACE_RECOGNITION" else "IMAGE_CLASSIFICATION"
+                            when (selectedMode) {
+                                AppMode.FACE_RECOGNITION -> "FACE_RECOGNITION"
+                                AppMode.TEXT_CLASSIFICATION -> "TEXT_CLASSIFICATION"
+                                else -> "IMAGE_CLASSIFICATION"
+                            }
                         )
                     }
                 },
                 enabled = name.isNotBlank(),
                 modifier = Modifier.testTag("confirm_create_project_btn")
             ) {
-                Text(if (selectedMode == AppMode.FACE_RECOGNITION) "Create Face Project" else "Create Project")
+                Text(
+                    when (selectedMode) {
+                        AppMode.FACE_RECOGNITION -> "Create Face Project"
+                        AppMode.TEXT_CLASSIFICATION -> "Create Text Project"
+                        else -> "Create Project"
+                    }
+                )
             }
         },
         dismissButton = {

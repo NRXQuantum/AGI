@@ -14,6 +14,7 @@ import com.example.ml.ModelArchitecture
 import com.example.ml.OptimizerType
 import com.example.ml.PredictionResult
 import com.example.ml.ProjectTrainingConfig
+import com.example.ml.TextModelEngine
 import com.example.ml.TrainingPhase
 import com.example.ml.TrainingProgress
 import com.example.service.TrainingManager
@@ -25,7 +26,8 @@ import kotlinx.coroutines.launch
 
 enum class AppMode {
     IMAGE_CLASSIFICATION,
-    FACE_RECOGNITION
+    FACE_RECOGNITION,
+    TEXT_CLASSIFICATION
 }
 
 class ProjectViewModel(application: Application) : AndroidViewModel(application) {
@@ -66,8 +68,20 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val projectTotalSamples: StateFlow<Int> = _selectedProjectId.flatMapLatest { id ->
-        if (id != null) repository.getTotalSampleCountForProject(id) else flowOf(0)
+        if (id != null) {
+            repository.getTotalSampleCountForProject(id).combine(repository.getTotalTextSampleCountForProject(id)) { imgCount, txtCount ->
+                imgCount + txtCount
+            }
+        } else flowOf(0)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val projectTotalTextSamples: StateFlow<Int> = _selectedProjectId.flatMapLatest { id ->
+        if (id != null) repository.getTotalTextSampleCountForProject(id) else flowOf(0)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    private val _textInferenceResult = MutableStateFlow<TextModelEngine.TextPrediction?>(null)
+    val textInferenceResult: StateFlow<TextModelEngine.TextPrediction?> = _textInferenceResult.asStateFlow()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val latestModel: StateFlow<TrainedModelEntity?> = _selectedProjectId.flatMapLatest { id ->
@@ -266,7 +280,11 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     fun createProject(
         name: String,
         description: String,
-        projectType: String = if (_currentAppMode.value == AppMode.FACE_RECOGNITION) "FACE_RECOGNITION" else "IMAGE_CLASSIFICATION",
+        projectType: String = when (_currentAppMode.value) {
+            AppMode.FACE_RECOGNITION -> "FACE_RECOGNITION"
+            AppMode.TEXT_CLASSIFICATION -> "TEXT_CLASSIFICATION"
+            else -> "IMAGE_CLASSIFICATION"
+        },
         onCreated: (Long) -> Unit
     ) {
         viewModelScope.launch {
@@ -274,6 +292,73 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
             _selectedProjectId.value = id
             onCreated(id)
         }
+    }
+
+    // Text Samples Operations
+    fun getTextSamplesForClass(classId: Long): Flow<List<TextSampleEntity>> =
+        repository.getTextSamplesForClass(classId)
+
+    fun addTextSample(classId: Long, text: String, maxTokens: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) {
+        val pId = _selectedProjectId.value ?: return
+        viewModelScope.launch {
+            repository.addTextSample(classId, pId, text, maxTokens)
+        }
+    }
+
+    fun addTextSamplesBatch(classId: Long, texts: List<String>, maxTokens: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) {
+        val pId = _selectedProjectId.value ?: return
+        viewModelScope.launch {
+            repository.addTextSamplesBatch(classId, pId, texts, maxTokens)
+        }
+    }
+
+    fun updateTextSample(sampleId: Long, classId: Long, newText: String, maxTokens: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) {
+        val pId = _selectedProjectId.value ?: return
+        viewModelScope.launch {
+            repository.updateTextSample(sampleId, classId, pId, newText, maxTokens)
+        }
+    }
+
+    fun deleteTextSample(sampleId: Long) {
+        viewModelScope.launch {
+            repository.deleteTextSample(sampleId)
+        }
+    }
+
+    fun updateTextSampleClass(sampleId: Long, newClassId: Long) {
+        viewModelScope.launch {
+            repository.updateTextSampleClass(sampleId, newClassId)
+        }
+    }
+
+    fun loadBenchmarkDataset(dataset: TextModelEngine.PreloadedDataset) {
+        val pId = _selectedProjectId.value ?: return
+        viewModelScope.launch {
+            repository.loadBenchmarkDataset(pId, dataset)
+        }
+    }
+
+    fun predictText(text: String, tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) {
+        val pId = _selectedProjectId.value ?: return
+        if (text.isBlank()) {
+            _textInferenceResult.value = null
+            return
+        }
+        viewModelScope.launch {
+            _isInferenceRunning.value = true
+            try {
+                val res = repository.predictText(pId, text, tokenLimit)
+                _textInferenceResult.value = res
+            } catch (e: Exception) {
+                AppLogger.e("ProjectViewModel", "Error running text inference", e)
+            } finally {
+                _isInferenceRunning.value = false
+            }
+        }
+    }
+
+    fun clearTextInference() {
+        _textInferenceResult.value = null
     }
 
     fun deleteProject(projectId: Long) {

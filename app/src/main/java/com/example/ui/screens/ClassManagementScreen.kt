@@ -64,6 +64,17 @@ fun ClassManagementScreen(
     val classes by viewModel.projectClasses.collectAsState()
     val context = LocalContext.current
 
+    if (project?.projectType == "TEXT_CLASSIFICATION") {
+        com.example.ui.components.TextDatasetStudio(
+            viewModel = viewModel,
+            project = project!!,
+            classes = classes,
+            onNavigateToTrain = onNavigateToTrain,
+            onNavigateBack = onNavigateBack
+        )
+        return
+    }
+
     var selectedClassId by remember(classes) {
         mutableStateOf(classes.firstOrNull()?.id)
     }
