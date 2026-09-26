@@ -108,84 +108,92 @@ fun TextDatabaseImportDialog(
             ?.filterBySelectedClasses(effectiveBaseResult.classCounts.keys - excludedClasses)
     }
 
+    var selectedMaxCap by remember { mutableIntStateOf(100_000) }
+    var lastSelectedUri by remember { mutableStateOf<Uri?>(null) }
+
+    fun parseFileUri(uri: Uri, cap: Int) {
+        lastSelectedUri = uri
+        coroutineScope.launch {
+            isStreamingParsing = true
+            streamProgressLines = 0L
+            streamProgressSamples = 0
+            streamingParseResult = null
+            rawText = ""
+
+            try {
+                val contentResolver = context.contentResolver
+                var displayName = "uploaded_file.txt"
+                var sizeBytes = 0L
+
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (cursor.moveToFirst()) {
+                        if (nameIndex >= 0) displayName = cursor.getString(nameIndex) ?: displayName
+                        if (sizeIndex >= 0) sizeBytes = cursor.getLong(sizeIndex)
+                    }
+                }
+
+                loadedFileName = displayName
+                isZipArchive = displayName.endsWith(".zip", ignoreCase = true)
+                loadedFileSize = when {
+                    sizeBytes > 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", sizeBytes / (1024.0 * 1024.0))
+                    sizeBytes > 1024 -> "${sizeBytes / 1024} KB"
+                    else -> "$sizeBytes bytes"
+                }
+
+                // Parse stream in background without allocating full string in RAM
+                val result = withContext(Dispatchers.IO) {
+                    contentResolver.openInputStream(uri)?.use { stream ->
+                        if (isZipArchive) {
+                            TextDatasetParser.parseZipStream(
+                                inputStream = stream,
+                                strategy = selectedStrategy,
+                                maxSampleCap = cap,
+                                onProgress = { lines, samples ->
+                                    streamProgressLines = lines
+                                    streamProgressSamples = samples
+                                }
+                            )
+                        } else {
+                            TextDatasetParser.parseStream(
+                                inputStream = stream,
+                                strategy = selectedStrategy,
+                                maxSampleCap = cap,
+                                onProgress = { lines, samples ->
+                                    streamProgressLines = lines
+                                    streamProgressSamples = samples
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (result != null && result.samples.isNotEmpty()) {
+                    streamingParseResult = result
+                    selectedTab = 0
+                    Toast.makeText(
+                        context,
+                        "Parsed ${result.samples.size} samples across ${result.classCounts.size} classes!",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    Toast.makeText(context, "No valid samples identified in file.", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Throwable) {
+                Toast.makeText(context, "Error reading file: ${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                isStreamingParsing = false
+            }
+        }
+    }
+
     // Memory-safe streaming file picker launcher (.zip, .txt, .csv, .tsv, .json, .jsonl, etc.)
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            coroutineScope.launch {
-                isStreamingParsing = true
-                streamProgressLines = 0L
-                streamProgressSamples = 0
-                streamingParseResult = null
-                rawText = ""
-
-                try {
-                    val contentResolver = context.contentResolver
-                    var displayName = "uploaded_file.txt"
-                    var sizeBytes = 0L
-
-                    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                        val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                        if (cursor.moveToFirst()) {
-                            if (nameIndex >= 0) displayName = cursor.getString(nameIndex) ?: displayName
-                            if (sizeIndex >= 0) sizeBytes = cursor.getLong(sizeIndex)
-                        }
-                    }
-
-                    loadedFileName = displayName
-                    isZipArchive = displayName.endsWith(".zip", ignoreCase = true)
-                    loadedFileSize = when {
-                        sizeBytes > 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", sizeBytes / (1024.0 * 1024.0))
-                        sizeBytes > 1024 -> "${sizeBytes / 1024} KB"
-                        else -> "$sizeBytes bytes"
-                    }
-
-                    // Parse stream in background without allocating full string in RAM
-                    val result = withContext(Dispatchers.IO) {
-                        contentResolver.openInputStream(uri)?.use { stream ->
-                            if (isZipArchive) {
-                                TextDatasetParser.parseZipStream(
-                                    inputStream = stream,
-                                    strategy = selectedStrategy,
-                                    maxSampleCap = 40_000,
-                                    onProgress = { lines, samples ->
-                                        streamProgressLines = lines
-                                        streamProgressSamples = samples
-                                    }
-                                )
-                            } else {
-                                TextDatasetParser.parseStream(
-                                    inputStream = stream,
-                                    strategy = selectedStrategy,
-                                    maxSampleCap = 40_000,
-                                    onProgress = { lines, samples ->
-                                        streamProgressLines = lines
-                                        streamProgressSamples = samples
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    if (result != null && result.samples.isNotEmpty()) {
-                        streamingParseResult = result
-                        selectedTab = 0
-                        Toast.makeText(
-                            context,
-                            "Parsed ${result.samples.size} samples across ${result.classCounts.size} classes!",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    } else {
-                        Toast.makeText(context, "No valid samples identified in file.", Toast.LENGTH_LONG).show()
-                    }
-                } catch (e: Throwable) {
-                    Toast.makeText(context, "Error reading file: ${e.message}", Toast.LENGTH_LONG).show()
-                } finally {
-                    isStreamingParsing = false
-                }
-            }
+            parseFileUri(uri, selectedMaxCap)
         }
     }
 
@@ -355,6 +363,61 @@ fun TextDatabaseImportDialog(
                                     .verticalScroll(rememberScrollState()),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
+                                // Max Sample Cap Selector
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "📥 স্যাম্পল সাইজ সীমা (Max Samples):",
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                            Text(
+                                                text = if (selectedMaxCap >= 150_000) "সবগুলো (All 100k+)" else "${selectedMaxCap / 1000}k স্যাম্পল",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        val capOptions = listOf(
+                                            Pair("সবগুলো (All 100k+)", 150_000),
+                                            Pair("70,000 (WizardLM)", 70_000),
+                                            Pair("50,000", 50_000),
+                                            Pair("25,000", 25_000),
+                                            Pair("10,000", 10_000)
+                                        )
+                                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            items(capOptions) { (label, capVal) ->
+                                                FilterChip(
+                                                    selected = selectedMaxCap == capVal,
+                                                    onClick = {
+                                                        selectedMaxCap = capVal
+                                                        if (lastSelectedUri != null && !isStreamingParsing) {
+                                                            parseFileUri(lastSelectedUri!!, capVal)
+                                                        }
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            text = label,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = if (selectedMaxCap == capVal) FontWeight.Bold else FontWeight.Normal
+                                                        )
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
                                 Surface(
                                     shape = RoundedCornerShape(14.dp),
                                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
@@ -770,6 +833,44 @@ fun DatasetPreviewCard(
                         Switch(
                             checked = enableTopicClustering,
                             onCheckedChange = onToggleTopicClustering
+                        )
+                    }
+                }
+            }
+
+            if (result.isCapped) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    color = Color(0xFFFEF3C7),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "ℹ️ সর্বোচ্চ সীমা (${result.samples.size} স্যাম্পল) পর্যন্ত লোড হয়েছে। ফাইলের সম্পূর্ণ ডেটা লোড করতে উপরের 'সবগুলো (All 100k+)' অপশন সিলেক্ট করুন।",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, color = Color(0xFF92400E))
+                        )
+                    }
+                }
+            } else if (result.samples.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    color = Color(0xFFD1FAE5),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "✅ সম্পূর্ণ ডেটাসেটের সবগুলো (${result.samples.size}) স্যাম্পল সফলভাবে লোড হয়েছে!",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, color = Color(0xFF065F46), fontWeight = FontWeight.Medium)
                         )
                     }
                 }

@@ -1860,46 +1860,57 @@ class ProjectRepository(
     ): TextModelEngine.TextChatMessage = withContext(Dispatchers.Default) {
         val startMs = System.currentTimeMillis()
         val prediction = predictText(projectId, userPrompt, tokenLimit)
-        val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
 
-        val allSamples = dao.getAllTextSamplesForProjectDirect(projectId)
         val classes = dao.getClassesForProjectDirect(projectId)
         val matchedClass = classes.find { it.className.equals(prediction.classLabel, ignoreCase = true) }
 
         val classSamples = if (matchedClass != null) {
-            allSamples.filter { it.classId == matchedClass.id }
-        } else emptyList()
+            dao.getTextSamplesForClassDirect(matchedClass.id, limit = 250)
+        } else {
+            emptyList()
+        }
 
-        val promptTokens = TextModelEngine.tokenize(userPrompt).tokens
-            .map { it.clean.lowercase(Locale.ROOT) }
+        val promptWords = userPrompt.lowercase(Locale.ROOT)
+            .split(Regex("[\\s,;:.!?\"'()\\[\\]{}]+"))
             .filter { it.length > 2 }
             .toSet()
 
         val bestReply = if (classSamples.isNotEmpty()) {
             var topSample = classSamples.first()
             var maxScore = -9999f
+
             for (sample in classSamples) {
-                val sTokens = TextModelEngine.tokenize(sample.textContent).tokens
-                    .map { it.clean.lowercase(Locale.ROOT) }
+                val rawContent = sample.textContent
+                val splitIdx = rawContent.indexOf('\n')
+                val matchTarget = if (splitIdx in 1..300) rawContent.substring(0, splitIdx) else rawContent
+
+                val targetWords = matchTarget.lowercase(Locale.ROOT)
+                    .split(Regex("[\\s,;:.!?\"'()\\[\\]{}]+"))
+                    .filter { it.length > 2 }
                     .toSet()
-                val overlap = promptTokens.intersect(sTokens).size
-                val lenDiff = kotlin.math.abs(sample.textContent.length - 90) * 0.002f
-                val score = (overlap * 2.5f) - lenDiff
+
+                val overlap = promptWords.intersect(targetWords).size
+                val score = (overlap * 3.5f) - (kotlin.math.abs(rawContent.length - 120) * 0.001f)
+
                 if (score > maxScore) {
                     maxScore = score
                     topSample = sample
                 }
             }
-            if (topSample.textContent.trim().equals(userPrompt.trim(), ignoreCase = true) && classSamples.size > 1) {
-                val otherSamples = classSamples.filter { !it.textContent.trim().equals(userPrompt.trim(), ignoreCase = true) }
-                otherSamples.randomOrNull()?.textContent ?: topSample.textContent
+
+            val chosenContent = topSample.textContent.trim()
+            val newlineIdx = chosenContent.indexOf('\n')
+            if (newlineIdx in 1 until chosenContent.length - 1) {
+                val candidateAnswer = chosenContent.substring(newlineIdx + 1).trim()
+                if (candidateAnswer.isNotBlank()) candidateAnswer else chosenContent
             } else {
-                topSample.textContent
+                chosenContent
             }
         } else {
             "Response matching category '${prediction.classLabel}' with ${String.format(Locale.US, "%.1f%%", prediction.confidence * 100f)} confidence."
         }
 
+        val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(2L)
         val salientWords = prediction.salientTokens.map { it.first }
 
         TextModelEngine.TextChatMessage(
@@ -1954,25 +1965,26 @@ class ProjectRepository(
             }
         }
 
-        val sampleEntities = parseResult.samples.mapNotNull { parsed ->
-            val classEntity = classMap[parsed.className.lowercase(Locale.ROOT)] ?: return@mapNotNull null
-            val tokenRes = TextModelEngine.tokenize(parsed.text)
-            TextSampleEntity(
-                classId = classEntity.id,
-                projectId = projectId,
-                textContent = parsed.text,
-                tokenCount = tokenRes.tokenCount
-            )
-        }
-
-        if (sampleEntities.isNotEmpty()) {
-            sampleEntities.chunked(500).forEach { chunk ->
-                dao.insertTextSamplesBatch(chunk)
+        var totalImported = 0
+        parseResult.samples.chunked(500).forEach { chunk ->
+            val chunkEntities = chunk.mapNotNull { parsed ->
+                val classEntity = classMap[parsed.className.lowercase(Locale.ROOT)] ?: return@mapNotNull null
+                val estTokens = estimateFastTokens(parsed.text)
+                TextSampleEntity(
+                    classId = classEntity.id,
+                    projectId = projectId,
+                    textContent = parsed.text,
+                    tokenCount = estTokens
+                )
+            }
+            if (chunkEntities.isNotEmpty()) {
+                dao.insertTextSamplesBatch(chunkEntities)
+                totalImported += chunkEntities.size
             }
         }
 
         val summary = parseResult.classCounts.entries.take(8).joinToString(", ") { "${it.key}: ${it.value}" } + (if (parseResult.classCounts.size > 8) "..." else "")
-        "Successfully imported ${sampleEntities.size} samples across ${parseResult.classCounts.size} classes ($summary)!"
+        "Successfully imported $totalImported samples across ${parseResult.classCounts.size} classes ($summary)!"
     }
 
     suspend fun autoClusterProjectClasses(projectId: Long): String = withContext(Dispatchers.IO) {
@@ -2007,21 +2019,40 @@ class ProjectRepository(
             topicMap[topic] = id
         }
 
-        val newSamples = clustered.mapNotNull { (topic, text) ->
-            val classId = topicMap[topic] ?: return@mapNotNull null
-            val tokenRes = TextModelEngine.tokenize(text)
-            TextSampleEntity(
-                classId = classId,
-                projectId = projectId,
-                textContent = text,
-                tokenCount = tokenRes.tokenCount
-            )
+        var totalReclustered = 0
+        clustered.chunked(500).forEach { chunk ->
+            val chunkEntities = chunk.mapNotNull { (topic, text) ->
+                val classId = topicMap[topic] ?: return@mapNotNull null
+                val estTokens = estimateFastTokens(text)
+                TextSampleEntity(
+                    classId = classId,
+                    projectId = projectId,
+                    textContent = text,
+                    tokenCount = estTokens
+                )
+            }
+            if (chunkEntities.isNotEmpty()) {
+                dao.insertTextSamplesBatch(chunkEntities)
+                totalReclustered += chunkEntities.size
+            }
         }
 
-        newSamples.chunked(500).forEach { chunk ->
-            dao.insertTextSamplesBatch(chunk)
-        }
+        "Successfully re-clustered $totalReclustered samples into ${topicMap.size} balanced topic classes! Ready for instant 3-second training."
+    }
 
-        "Successfully re-clustered ${newSamples.size} samples into ${topicMap.size} balanced topic classes! Ready for instant 3-second training."
+    private fun estimateFastTokens(text: String): Int {
+        if (text.isEmpty()) return 0
+        var count = 0
+        var inWord = false
+        val len = text.length
+        for (i in 0 until len) {
+            if (text[i].isWhitespace()) {
+                inWord = false
+            } else if (!inWord) {
+                inWord = true
+                count++
+            }
+        }
+        return count.coerceIn(1, 1024)
     }
 }

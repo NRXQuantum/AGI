@@ -93,7 +93,7 @@ object TextDatasetParser {
     fun parseStream(
         inputStream: InputStream,
         strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
-        maxSampleCap: Int = 40_000,
+        maxSampleCap: Int = 100_000,
         onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)? = null
     ): ParseResult {
         val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8), 32 * 1024)
@@ -106,7 +106,7 @@ object TextDatasetParser {
     fun parseZipStream(
         inputStream: InputStream,
         strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
-        maxSampleCap: Int = 40_000,
+        maxSampleCap: Int = 100_000,
         onProgress: ((linesRead: Long, samplesFound: Int) -> Unit)? = null
     ): ParseResult {
         val zipStream = ZipInputStream(inputStream)
@@ -162,7 +162,7 @@ object TextDatasetParser {
     fun parse(
         rawContent: String,
         strategy: DatasetFormatStrategy = DatasetFormatStrategy.AUTO_DETECT,
-        maxSampleCap: Int = 40_000
+        maxSampleCap: Int = 100_000
     ): ParseResult {
         val trimmed = rawContent.trim()
         if (trimmed.isBlank()) {
@@ -793,7 +793,7 @@ object TextDatasetParser {
      * Prevents class explosion (e.g. 4520 classes) and speeds up training by 100x.
      */
     fun classifyTopic(text: String): String {
-        val lower = text.lowercase(Locale.ROOT)
+        val lower = if (text.length > 600) text.take(600).lowercase(Locale.ROOT) else text.lowercase(Locale.ROOT)
 
         var scoreTech = 0
         var scoreKnowledge = 0

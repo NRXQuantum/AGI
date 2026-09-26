@@ -80,6 +80,9 @@ interface ProjectDao {
     @Query("SELECT * FROM text_samples WHERE projectId = :projectId")
     suspend fun getAllTextSamplesForProjectDirect(projectId: Long): List<TextSampleEntity>
 
+    @Query("SELECT * FROM text_samples WHERE classId = :classId ORDER BY id DESC LIMIT :limit")
+    suspend fun getTextSamplesForClassDirect(classId: Long, limit: Int = 200): List<TextSampleEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTextSample(sample: TextSampleEntity): Long
 
