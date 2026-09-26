@@ -73,6 +73,16 @@ fun TrainingScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
+    val modelImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importModelFile(uri) { success, msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     var epochs by remember { mutableFloatStateOf(30f) }
     var learningRate by remember { mutableFloatStateOf(0.003f) }
     var batchSize by remember { mutableIntStateOf(32) }
@@ -754,6 +764,23 @@ fun TrainingScreen(
                                             Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(if (isFaceMode) "Export Person Model" else "Export Formats", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                        }
+
+                                        Spacer(modifier = Modifier.width(6.dp))
+
+                                        OutlinedButton(
+                                            onClick = {
+                                                modelImportLauncher.launch(arrayOf("application/json", "application/octet-stream", "*/*"))
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(40.dp),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp)
+                                        ) {
+                                            Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Import Model", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                                         }
                                     }
                                 }

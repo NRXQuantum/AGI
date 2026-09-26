@@ -63,8 +63,36 @@ object TextModelEngine {
         val confidence: Float = 0f,
         val latencyMs: Long = 0L,
         val salientKeywords: List<String> = emptyList(),
-        val classProbabilities: List<ClassConfidence> = emptyList()
+        val classProbabilities: List<ClassConfidence> = emptyList(),
+        val engineMode: String = "INSTRUCT_EXPERT"
     )
+
+    enum class TextChatEngineMode(
+        val title: String,
+        val subtitle: String,
+        val tag: String
+    ) {
+        INSTRUCT_EXPERT(
+            title = "🧠 Instruct & Code Specialist",
+            subtitle = "Optimized for structured tables, code blocks, step-by-step instructions & formatting",
+            tag = "Instruct"
+        ),
+        BALANCED_DIALOGUE(
+            title = "💬 Balanced Dialogue",
+            subtitle = "Natural conversation with balanced intent classification & response flow",
+            tag = "Dialogue"
+        ),
+        EXACT_RETRIEVER(
+            title = "🎯 Exact Knowledge Match",
+            subtitle = "High precision responses strictly matching dataset samples",
+            tag = "Exact"
+        ),
+        FAST_FLOW(
+            title = "⚡ Fast Neural Flow (Low Latency)",
+            subtitle = "Ultra-low latency (<5ms) edge inference for rapid interaction",
+            tag = "Fast"
+        )
+    }
 
     data class PreloadedDataset(
         val name: String,

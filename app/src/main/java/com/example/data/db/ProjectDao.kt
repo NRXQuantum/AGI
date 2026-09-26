@@ -114,6 +114,15 @@ interface ProjectDao {
     @Query("SELECT * FROM trained_models WHERE projectId = :projectId ORDER BY trainedAt DESC LIMIT 1")
     suspend fun getLatestTrainedModelDirect(projectId: Long): TrainedModelEntity?
 
+    @Query("SELECT * FROM trained_models WHERE projectId = :projectId ORDER BY trainedAt DESC")
+    fun getAllTrainedModelsForProject(projectId: Long): Flow<List<TrainedModelEntity>>
+
+    @Query("SELECT * FROM trained_models WHERE projectId = :projectId ORDER BY trainedAt DESC")
+    suspend fun getAllTrainedModelsForProjectDirect(projectId: Long): List<TrainedModelEntity>
+
+    @Query("SELECT * FROM trained_models WHERE id = :modelId")
+    suspend fun getTrainedModelByIdDirect(modelId: Long): TrainedModelEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTrainedModel(model: TrainedModelEntity): Long
 }

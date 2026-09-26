@@ -75,6 +75,9 @@ fun TextInferenceStudio(
     // Tab 2 state: Interactive dialogue chat
     val chatMessages by viewModel.chatMessages.collectAsState()
     val isChatGenerating by viewModel.isChatGenerating.collectAsState()
+    val allTrainedModels by viewModel.allTrainedModels.collectAsState()
+    val selectedChatEngineMode by viewModel.selectedChatEngineMode.collectAsState()
+    val selectedChatModelId by viewModel.selectedChatModelId.collectAsState()
     var chatInputText by remember { mutableStateOf("") }
     val chatListState = rememberLazyListState()
 
@@ -238,6 +241,11 @@ fun TextInferenceStudio(
                         viewModel = viewModel,
                         classes = classes,
                         latestModel = latestModel,
+                        allTrainedModels = allTrainedModels,
+                        selectedChatEngineMode = selectedChatEngineMode,
+                        selectedChatModelId = selectedChatModelId,
+                        onSelectEngineMode = { viewModel.setChatEngineMode(it) },
+                        onSelectModelId = { viewModel.setSelectedChatModelId(it) },
                         chatMessages = chatMessages,
                         isChatGenerating = isChatGenerating,
                         chatInputText = chatInputText,
@@ -247,7 +255,11 @@ fun TextInferenceStudio(
                             if (latestModel == null) {
                                 Toast.makeText(context, "Please train the model first!", Toast.LENGTH_SHORT).show()
                             } else {
-                                viewModel.sendChatMessage(prompt)
+                                viewModel.sendChatMessage(
+                                    userText = prompt,
+                                    engineMode = selectedChatEngineMode,
+                                    modelId = selectedChatModelId
+                                )
                                 chatInputText = ""
                             }
                         },
@@ -370,6 +382,11 @@ fun InteractiveDialogueChatTab(
     viewModel: ProjectViewModel,
     classes: List<ClassificationClassEntity>,
     latestModel: TrainedModelEntity?,
+    allTrainedModels: List<TrainedModelEntity>,
+    selectedChatEngineMode: TextModelEngine.TextChatEngineMode,
+    selectedChatModelId: Long?,
+    onSelectEngineMode: (TextModelEngine.TextChatEngineMode) -> Unit,
+    onSelectModelId: (Long?) -> Unit,
     chatMessages: List<TextModelEngine.TextChatMessage>,
     isChatGenerating: Boolean,
     chatInputText: String,
@@ -379,44 +396,167 @@ fun InteractiveDialogueChatTab(
     onClearChat: () -> Unit,
     onSaveFeedback: (String) -> Unit
 ) {
+    val context = LocalContext.current
+    var showModelSelectorDialog by remember { mutableStateOf(false) }
+
+    // Model File Picker for importing local .json, .tflite, .onnx, .mlmodel, .pb
+    val modelFilePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importModelFile(uri) { success, msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .imePadding()
     ) {
-        // Chat Header / Quick Actions
-        Row(
+        // Model Selection & Engine Profile Bar
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 12.dp, vertical = 4.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Forum,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Model Dialogue Chat (${chatMessages.size} turns)",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-
-            if (chatMessages.isNotEmpty()) {
-                TextButton(
-                    onClick = onClearChat,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                // Top Row: Model Checkpoint Selector & Clear Chat
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Clear Chat", style = MaterialTheme.typography.labelSmall)
+                    // Clickable Model Studio Pill
+                    Surface(
+                        onClick = { showModelSelectorDialog = true },
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "Model Settings",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            val modelTitle = remember(selectedChatModelId, allTrainedModels, latestModel) {
+                                if (selectedChatModelId == null) {
+                                    if (latestModel != null) "Model: Active v${latestModel.id} (${String.format(Locale.US, "%.1f%%", latestModel.accuracy * 100f)})" else "Model: Auto (Default)"
+                                } else {
+                                    val m = allTrainedModels.find { it.id == selectedChatModelId }
+                                    if (m != null) "Model: Checkpoint v${m.id} (${String.format(Locale.US, "%.1f%%", m.accuracy * 100f)})" else "Model: v$selectedChatModelId"
+                                }
+                            }
+                            Text(
+                                text = modelTitle,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "Select / Switch",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Quick Import Model Button in Top Bar
+                        FilledTonalButton(
+                            onClick = {
+                                modelFilePicker.launch(arrayOf("application/json", "application/octet-stream", "*/*"))
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Import Model", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold))
+                        }
+
+                        if (chatMessages.isNotEmpty()) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(
+                                onClick = onClearChat,
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(13.dp))
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("Clear", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp))
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Engine Profile Filter Chips
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(TextModelEngine.TextChatEngineMode.values()) { mode ->
+                        FilterChip(
+                            selected = selectedChatEngineMode == mode,
+                            onClick = { onSelectEngineMode(mode) },
+                            label = {
+                                Text(
+                                    text = mode.tag,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = if (selectedChatEngineMode == mode) FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            modifier = Modifier.height(28.dp)
+                        )
+                    }
                 }
             }
+        }
+
+        // Model Selector Modal Dialog
+        if (showModelSelectorDialog) {
+            TextModelSelectorDialog(
+                viewModel = viewModel,
+                latestModel = latestModel,
+                allTrainedModels = allTrainedModels,
+                classes = classes,
+                selectedModelId = selectedChatModelId,
+                selectedEngineMode = selectedChatEngineMode,
+                onSelectModel = { id -> onSelectModelId(id) },
+                onSelectEngine = { mode -> onSelectEngineMode(mode) },
+                onDismiss = { showModelSelectorDialog = false }
+            )
         }
 
         // Messages List or Empty Welcome State
@@ -426,7 +566,7 @@ fun InteractiveDialogueChatTab(
                 .fillMaxWidth()
         ) {
             if (chatMessages.isEmpty()) {
-                // Empty state with quick starter prompt chips
+                // Empty state with rich starter prompt chips (tables, code, instruct)
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -452,7 +592,7 @@ fun InteractiveDialogueChatTab(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Real-Time Dialogue & Chat Studio",
+                        text = "AI Dialogue & Instruction Studio",
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -460,7 +600,7 @@ fun InteractiveDialogueChatTab(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "আপনার আপলোড করা বড় টেক্সট ডাটাবেজ (যেমন input.txt / ডায়লগ স্ক্রিপ্ট) এর প্রতিটি চরিত্র বা ক্যাটাগরির সাথে সরাসরি চ্যাট করুন। মডেলটি রিয়েল-টাইমে প্রেডিক্ট করে ডায়লগ রেসপন্স দেবে।",
+                        text = "আপনার আপলোড করা ডেটাসেট (Alpaca, WizardLM, SQuAD, Dialogue) দিয়ে ট্রেন্ড মডেলের সাথে চ্যাট করুন। এটি কোড ব্লক, টেবিল ও নির্দেশনার মাধ্যমে রিয়েল-টাইমে রেসপন্স দেবে।",
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -470,7 +610,7 @@ fun InteractiveDialogueChatTab(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = "Try a sample dialogue prompt:",
+                        text = "Try a sample instruction / dialogue prompt:",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.align(Alignment.Start)
@@ -479,21 +619,12 @@ fun InteractiveDialogueChatTab(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     val samplePrompts = remember(classes) {
-                        val list = mutableListOf<String>()
-                        if (classes.any { it.className.contains("Citizen", ignoreCase = true) || it.className.contains("Menenius", ignoreCase = true) }) {
-                            list.add("What work's, my countrymen, in hand? where go you with bats and clubs?")
-                            list.add("You are all resolved rather to die than to famish?")
-                            list.add("First, you know Caius Marcius is chief enemy to the people.")
-                            list.add("Let us kill him, and we'll have corn at our own price.")
-                            list.add("Worthy Menenius Agrippa; one that hath always loved the people.")
-                        } else {
-                            list.add("This is an outstanding product, works completely as expected!")
-                            list.add("My account was charged twice, how can I request a refund?")
-                            list.add("App keeps freezing on launch screen and crashing.")
-                            list.add("Can you add custom theme support in the next update?")
-                            list.add("URGENT: Verify your account within 24 hours or get locked!")
-                        }
-                        list
+                        listOf(
+                            "Can you provide an excel table that lists 3 benefits of eating a balanced diet along with their corresponding nutritional values?",
+                            "How can we analyze the sentiment of a given text using natural language processing with SentimentAnalysis.Core in Scala?",
+                            "Explain the core differences between Classification and Regression in machine learning.",
+                            "Write a step-by-step approach to preprocess and clean a text dataset with code snippet."
+                        )
                     }
 
                     Column(
@@ -524,7 +655,7 @@ fun InteractiveDialogueChatTab(
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = prompt,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
                                         color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
@@ -570,7 +701,7 @@ fun InteractiveDialogueChatTab(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Model predicting intent & dialogue reply...",
+                                        text = "Model generating structured dialogue & code...",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -584,95 +715,86 @@ fun InteractiveDialogueChatTab(
 
         // Quick Suggestion Chips above input bar
         val quickChips = remember(classes) {
-            val list = mutableListOf<String>()
-            if (classes.any { it.className.contains("Citizen", ignoreCase = true) }) {
-                list.add("First Citizen")
-                list.add("Second Citizen")
-                list.add("MENENIUS")
-                list.add("All")
-            } else {
-                classes.take(5).forEach { list.add(it.className) }
-            }
-            list
+            classes.take(6).map { it.className }
         }
 
         if (quickChips.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp),
+                    .padding(horizontal = 12.dp, vertical = 3.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(quickChips) { chipText ->
-                    AssistChip(
-                        onClick = {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                        modifier = Modifier.clickable {
                             val newText = if (chatInputText.isBlank()) "$chipText: " else "$chatInputText $chipText"
                             onChatInputChange(newText)
-                        },
-                        label = { Text(chipText, fontSize = 11.sp) },
-                        leadingIcon = {
-                            Icon(Icons.Default.Tag, contentDescription = null, modifier = Modifier.size(12.dp))
                         }
-                    )
+                    ) {
+                        Text(
+                            text = chipText,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
                 }
             }
         }
 
-        // Bottom Input Row
+        // Bottom Input Bar
         Surface(
-            tonalElevation = 4.dp,
-            shadowElevation = 8.dp,
+            modifier = Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-            modifier = Modifier.fillMaxWidth()
+            tonalElevation = 4.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = chatInputText,
                     onValueChange = onChatInputChange,
-                    placeholder = { Text("Type dialogue or message to chat...", fontSize = 13.sp) },
+                    placeholder = { Text("Ask question, request code, or type message...", fontSize = 12.5.sp) },
                     modifier = Modifier
                         .weight(1f)
                         .testTag("chat_input_field"),
-                    maxLines = 4,
-                    minLines = 1,
                     shape = RoundedCornerShape(20.dp),
+                    maxLines = 4,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
                     )
                 )
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                FilledIconButton(
+                IconButton(
                     onClick = {
                         if (chatInputText.isNotBlank()) {
                             onSendMessage(chatInputText)
                         }
                     },
                     enabled = chatInputText.isNotBlank() && !isChatGenerating,
-                    modifier = Modifier
-                        .size(46.dp)
-                        .testTag("send_chat_btn"),
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier
+                        .size(42.dp)
+                        .testTag("send_chat_btn")
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send",
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
@@ -681,7 +803,7 @@ fun InteractiveDialogueChatTab(
 }
 
 /**
- * Individual Chat Bubble
+ * Individual Chat Bubble with Rich Markdown, Code Block & Table Rendering
  */
 @Composable
 fun ChatMessageItem(
@@ -709,7 +831,7 @@ fun ChatMessageItem(
             Row(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.End,
-                modifier = Modifier.fillMaxWidth(0.88f)
+                modifier = Modifier.fillMaxWidth(0.92f)
             ) {
                 Surface(
                     shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
@@ -717,10 +839,10 @@ fun ChatMessageItem(
                     tonalElevation = 2.dp
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
+                        RichChatContent(
                             text = message.text,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            isUser = true,
+                            accentColor = MaterialTheme.colorScheme.onPrimary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -740,7 +862,7 @@ fun ChatMessageItem(
             horizontalAlignment = Alignment.Start
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(0.92f),
+                modifier = Modifier.fillMaxWidth(0.98f),
                 horizontalArrangement = Arrangement.Start,
                 verticalAlignment = Alignment.Top
             ) {
@@ -749,12 +871,12 @@ fun ChatMessageItem(
                     shape = CircleShape,
                     color = classColor.copy(alpha = 0.2f),
                     border = BorderStroke(1.5.dp, classColor),
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(34.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
                             text = message.senderName.take(1).uppercase(Locale.ROOT),
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 13.sp),
                             color = classColor
                         )
                     }
@@ -762,7 +884,7 @@ fun ChatMessageItem(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     // Header Badge
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -770,7 +892,7 @@ fun ChatMessageItem(
                     ) {
                         Text(
                             text = message.senderName,
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 12.sp),
                             color = classColor
                         )
 
@@ -783,10 +905,10 @@ fun ChatMessageItem(
                                     text = "${String.format(Locale.US, "%.1f", message.confidence * 100f)}% match",
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 10.sp
+                                        fontSize = 9.5.sp
                                     ),
                                     color = classColor,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                 )
                             }
                         }
@@ -794,7 +916,7 @@ fun ChatMessageItem(
                         if (message.latencyMs > 0L) {
                             Text(
                                 text = "• ${message.latencyMs}ms",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -802,18 +924,18 @@ fun ChatMessageItem(
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Message Bubble
+                    // Message Bubble with Rich Markdown, Code Blocks, Tables
                     Surface(
                         shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            RichChatContent(
                                 text = message.text,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                lineHeight = 20.sp
+                                isUser = false,
+                                accentColor = classColor
                             )
 
                             // Salient Keywords
@@ -825,7 +947,7 @@ fun ChatMessageItem(
                                 ) {
                                     Text(
                                         text = "Salient:",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                     )
                                     message.salientKeywords.take(3).forEach { kw ->
@@ -836,7 +958,7 @@ fun ChatMessageItem(
                                             Text(
                                                 text = kw,
                                                 style = MaterialTheme.typography.labelSmall.copy(
-                                                    fontSize = 9.sp,
+                                                    fontSize = 8.5.sp,
                                                     fontWeight = FontWeight.Bold
                                                 ),
                                                 color = classColor,
@@ -857,7 +979,7 @@ fun ChatMessageItem(
                             ) {
                                 Text(
                                     text = timeStr,
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 )
 
@@ -867,7 +989,7 @@ fun ChatMessageItem(
                                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                             val clip = ClipData.newPlainText("Dialogue", message.text)
                                             clipboard.setPrimaryClip(clip)
-                                            Toast.makeText(context, "Copied dialogue to clipboard", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Copied text to clipboard", Toast.LENGTH_SHORT).show()
                                         },
                                         modifier = Modifier.size(24.dp)
                                     ) {
@@ -886,7 +1008,7 @@ fun ChatMessageItem(
                                         Icon(
                                             Icons.Outlined.BookmarkAdd,
                                             contentDescription = "Save to Dataset",
-                                            modifier = Modifier.size(14.dp),
+                                            modifier = Modifier.size(13.dp),
                                             tint = classColor
                                         )
                                     }
@@ -1226,4 +1348,379 @@ fun SentenceClassifierTab(
             }
         }
     }
+}
+
+/**
+ * High-End AI Model Selector & Hyperparameters Tuning Dialog
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TextModelSelectorDialog(
+    viewModel: ProjectViewModel,
+    latestModel: TrainedModelEntity?,
+    allTrainedModels: List<TrainedModelEntity>,
+    classes: List<ClassificationClassEntity>,
+    selectedModelId: Long?,
+    selectedEngineMode: TextModelEngine.TextChatEngineMode,
+    onSelectModel: (Long?) -> Unit,
+    onSelectEngine: (TextModelEngine.TextChatEngineMode) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var tempSelectedModelId by remember { mutableStateOf(selectedModelId) }
+    var tempSelectedEngineMode by remember { mutableStateOf(selectedEngineMode) }
+    var selectedTokenBudget by remember { mutableIntStateOf(500) }
+    var temperatureValue by remember { mutableFloatStateOf(0.7f) }
+    var prioritizeTablesAndCode by remember { mutableStateOf(true) }
+
+    // File picker to import local model (.json, .tflite, .onnx, etc.)
+    val modelPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importModelFile(uri) { success, msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                if (success) {
+                    tempSelectedModelId = viewModel.selectedChatModelId.value
+                }
+            }
+        }
+    }
+
+    val dateFormat = remember { SimpleDateFormat("MMM dd, yyyy • h:mm a", Locale.getDefault()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp),
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.Tune,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Model & Engine Studio",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "মডেল আর্কিটেকচার ও ইঞ্জিন সিলেক্ট করুন",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(18.dp))
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // SECTION 1: Model Checkpoint Selection
+                Text(
+                    text = "1. Model Weights & Checkpoint (মডেল চেকপয়েন্ট)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                // IMPORT LOCAL MODEL CARD
+                Surface(
+                    onClick = {
+                        modelPickerLauncher.launch(arrayOf("application/json", "application/octet-stream", "*/*"))
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.FileOpen,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "📂 Import Local Model File",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 12.5.sp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "লোকালে থাকা .json, .tflite, .onnx, .mlmodel ইনপুট করুন",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                modelPickerLauncher.launch(arrayOf("application/json", "application/octet-stream", "*/*"))
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("Browse", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                // Option: Latest Active Model
+                Surface(
+                    onClick = { tempSelectedModelId = null },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (tempSelectedModelId == null) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    border = BorderStroke(
+                        1.5.dp,
+                        if (tempSelectedModelId == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = tempSelectedModelId == null,
+                            onClick = { tempSelectedModelId = null }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "⚡ Active Latest Model",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                if (latestModel != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = Color(0xFF10B981).copy(alpha = 0.2f)
+                                    ) {
+                                        Text(
+                                            text = "${String.format(Locale.US, "%.1f%%", latestModel.accuracy * 100f)} Acc",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                            color = Color(0xFF059669),
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = if (latestModel != null) "Trained: ${dateFormat.format(Date(latestModel.trainedAt))} • ${classes.size} classes • ${latestModel.featureDim} dims" else "Auto routes to newest trained weights",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Checkpoint models list
+                if (allTrainedModels.isNotEmpty()) {
+                    allTrainedModels.forEach { m ->
+                        val isSelected = tempSelectedModelId == m.id
+                        Surface(
+                            onClick = { tempSelectedModelId = m.id },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            border = BorderStroke(
+                                1.5.dp,
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { tempSelectedModelId = m.id }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Model Checkpoint v${m.id}",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                        ) {
+                                            Text(
+                                                text = "${String.format(Locale.US, "%.1f%%", m.accuracy * 100f)} Acc",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = "${m.numClasses} Classes • ${m.featureDim} Feature Dims • Neural Feed-Forward",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = dateFormat.format(Date(m.trainedAt)),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                // SECTION 2: Reasoning & Generation Engine Architecture
+                Text(
+                    text = "2. Inference & Generation Engine (ইঞ্জিন মোড)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                TextModelEngine.TextChatEngineMode.values().forEach { mode ->
+                    val isModeSelected = tempSelectedEngineMode == mode
+                    Surface(
+                        onClick = { tempSelectedEngineMode = mode },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isModeSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(
+                            1.5.dp,
+                            if (isModeSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isModeSelected,
+                                onClick = { tempSelectedEngineMode = mode }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = mode.title,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 12.5.sp),
+                                    color = if (isModeSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = mode.subtitle,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                // SECTION 3: Response Parameters & Formatting
+                Text(
+                    text = "3. Response Tuning & Output Limits (টোকেন ও ফরম্যাটিং)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                // Token budget selector chips
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Max Output Token Budget:", style = MaterialTheme.typography.labelSmall)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf(100, 250, 500, 1000).forEach { tokens ->
+                            FilterChip(
+                                selected = selectedTokenBudget == tokens,
+                                onClick = { selectedTokenBudget = tokens },
+                                label = { Text("$tokens tokens", fontSize = 10.5.sp) },
+                                modifier = Modifier.height(28.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Table & Code formatting priority toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Prioritize Tables & Code Blocks",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        )
+                        Text(
+                            text = "মার্কডাউন টেবিল ও কোড ব্লক ফরম্যাট অগ্রাধিকার দিন",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = prioritizeTablesAndCode,
+                        onCheckedChange = { prioritizeTablesAndCode = it }
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSelectModel(tempSelectedModelId)
+                    onSelectEngine(tempSelectedEngineMode)
+                    onDismiss()
+                }
+            ) {
+                Text("Apply Model Selection")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }

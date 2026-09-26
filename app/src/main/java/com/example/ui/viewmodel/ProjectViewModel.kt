@@ -89,6 +89,11 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         if (id != null) repository.getLatestTrainedModel(id) else flowOf(null)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val allTrainedModels: StateFlow<List<TrainedModelEntity>> = _selectedProjectId.flatMapLatest { id ->
+        if (id != null) repository.getAllTrainedModelsForProject(id) else flowOf(emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val trainingProgress: StateFlow<TrainingProgress?> = TrainingManager.trainingProgress
 
     val isTraining: StateFlow<Boolean> = TrainingManager.isTraining
@@ -388,7 +393,26 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     private val _isChatGenerating = MutableStateFlow(false)
     val isChatGenerating: StateFlow<Boolean> = _isChatGenerating.asStateFlow()
 
-    fun sendChatMessage(userText: String, tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) {
+    private val _selectedChatEngineMode = MutableStateFlow(TextModelEngine.TextChatEngineMode.INSTRUCT_EXPERT)
+    val selectedChatEngineMode: StateFlow<TextModelEngine.TextChatEngineMode> = _selectedChatEngineMode.asStateFlow()
+
+    private val _selectedChatModelId = MutableStateFlow<Long?>(null)
+    val selectedChatModelId: StateFlow<Long?> = _selectedChatModelId.asStateFlow()
+
+    fun setChatEngineMode(mode: TextModelEngine.TextChatEngineMode) {
+        _selectedChatEngineMode.value = mode
+    }
+
+    fun setSelectedChatModelId(modelId: Long?) {
+        _selectedChatModelId.value = modelId
+    }
+
+    fun sendChatMessage(
+        userText: String,
+        tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT,
+        engineMode: TextModelEngine.TextChatEngineMode = _selectedChatEngineMode.value,
+        modelId: Long? = _selectedChatModelId.value
+    ) {
         val pId = _selectedProjectId.value ?: return
         if (userText.isBlank()) return
         val userMsg = TextModelEngine.TextChatMessage(
@@ -401,7 +425,13 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isChatGenerating.value = true
             try {
-                val reply = repository.generateDialogueReply(pId, userText, tokenLimit)
+                val reply = repository.generateDialogueReply(
+                    projectId = pId,
+                    userPrompt = userText,
+                    tokenLimit = tokenLimit,
+                    engineMode = engineMode,
+                    selectedModelId = modelId
+                )
                 _chatMessages.value = _chatMessages.value + reply
             } catch (e: Exception) {
                 AppLogger.e("ProjectViewModel", "Error in generateDialogueReply", e)
@@ -413,6 +443,19 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearChatMessages() {
         _chatMessages.value = emptyList()
+    }
+
+    fun importModelFile(uri: Uri, onResult: (Boolean, String) -> Unit) {
+        val projectId = _selectedProjectId.value ?: return
+        viewModelScope.launch {
+            val res = repository.importModelFile(projectId, uri)
+            res.onSuccess { model ->
+                _selectedChatModelId.value = model.id
+                onResult(true, "Model checkpoint v${model.id} successfully imported (${model.numClasses} classes)!")
+            }.onFailure { err ->
+                onResult(false, err.message ?: "Failed to import model file")
+            }
+        }
     }
 
     fun deleteProject(projectId: Long) {

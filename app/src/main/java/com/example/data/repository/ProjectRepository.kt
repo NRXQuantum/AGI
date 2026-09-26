@@ -1853,27 +1853,258 @@ class ProjectRepository(
         )
     }
 
+    fun getAllTrainedModelsForProject(projectId: Long): Flow<List<TrainedModelEntity>> {
+        return dao.getAllTrainedModelsForProject(projectId)
+    }
+
+    suspend fun importModelFile(projectId: Long, uri: Uri): Result<TrainedModelEntity> = withContext(Dispatchers.IO) {
+        try {
+            val fileName = getFileNameFromUri(uri) ?: "imported_model"
+            val inputStream = context.contentResolver.openInputStream(uri)
+                ?: return@withContext Result.failure(Exception("Cannot open file stream from URI: $uri"))
+            val contentBytes = inputStream.use { it.readBytes() }
+
+            if (contentBytes.isEmpty()) {
+                return@withContext Result.failure(Exception("Model file is empty"))
+            }
+
+            val modelsDir = File(context.filesDir, "trained_models").apply { mkdirs() }
+            val targetWeightsFile = File(modelsDir, "project_${projectId}_imported_${System.currentTimeMillis()}.json")
+
+            var numClasses = 0
+            var featureDim = TextModelEngine.FEATURE_DIM
+            var accuracy = 0.95f
+            var biasJson = "[]"
+            var classLabelsJson = "[]"
+            var scaleMeansJson = "[]"
+            var scaleStdsJson = "[]"
+            var weightsWritten = false
+
+            // Check if JSON
+            val contentString = try {
+                String(contentBytes, Charsets.UTF_8).trim()
+            } catch (_: Exception) { "" }
+
+            if (contentString.startsWith("{")) {
+                try {
+                    val rootObj = org.json.JSONObject(contentString)
+
+                    val classifierObj = rootObj.optJSONObject("neuralNetworkClassifier")
+                        ?: rootObj.optJSONObject("model")
+                        ?: rootObj
+
+                    // Extract Class Labels
+                    val labelsArr = classifierObj.optJSONArray("classLabels")
+                        ?: classifierObj.optJSONArray("labels")
+                        ?: rootObj.optJSONArray("classLabels")
+                        ?: rootObj.optJSONArray("classes")
+                        ?: org.json.JSONArray()
+
+                    if (labelsArr.length() > 0) {
+                        classLabelsJson = labelsArr.toString()
+                        numClasses = labelsArr.length()
+                    }
+
+                    // Extract Weights
+                    val weightsObj = classifierObj.opt("weights")
+                        ?: classifierObj.opt("weightsJson")
+                        ?: rootObj.opt("weights")
+                        ?: rootObj.opt("weightsJson")
+
+                    if (weightsObj != null) {
+                        targetWeightsFile.writeText(weightsObj.toString(), Charsets.UTF_8)
+                        weightsWritten = true
+                    }
+
+                    // Extract Biases
+                    val biasesObj = classifierObj.opt("biases")
+                        ?: classifierObj.opt("biasJson")
+                        ?: rootObj.opt("biases")
+                        ?: rootObj.opt("biasJson")
+
+                    if (biasesObj != null) {
+                        biasJson = biasesObj.toString()
+                    }
+
+                    // Extract Scales & Parameters
+                    scaleMeansJson = classifierObj.opt("scale_means")?.toString()
+                        ?: classifierObj.opt("scaleMeans")?.toString() ?: "[]"
+                    scaleStdsJson = classifierObj.opt("scale_stds")?.toString()
+                        ?: classifierObj.opt("scaleStds")?.toString() ?: "[]"
+
+                    featureDim = rootObj.optInt("featureDim", rootObj.optInt("feature_dim", TextModelEngine.FEATURE_DIM))
+                    accuracy = rootObj.optDouble("accuracy", rootObj.optDouble("trainAccuracy", 0.95)).toFloat()
+                } catch (e: Exception) {
+                    AppLogger.e("ProjectRepository", "Error parsing model JSON", e)
+                }
+            }
+
+            // If not raw JSON, parse via TFLite / ONNX / CoreML / PB binary loader
+            if (!weightsWritten) {
+                val loaded = TFLiteModelLoader.loadFromBytes(contentBytes, fileName)
+                if (loaded != null) {
+                    numClasses = loaded.numClasses
+                    val trainer = loaded.trainer
+                    featureDim = trainer.weights.firstOrNull()?.size ?: TextModelEngine.FEATURE_DIM
+                    val labelsArray = org.json.JSONArray()
+                    loaded.classLabels.forEach { labelsArray.put(it) }
+                    classLabelsJson = labelsArray.toString()
+
+                    targetWeightsFile.writeText(trainer.exportWeightsJson(), Charsets.UTF_8)
+                    weightsWritten = true
+                    biasJson = trainer.exportBiasesJson()
+                    scaleMeansJson = trainer.exportScaleMeansJson()
+                    scaleStdsJson = trainer.exportScaleStdsJson()
+                } else {
+                    return@withContext Result.failure(Exception("Unsupported or corrupt model file. Supported: .json (Weights & Metadata), .tflite, .onnx, .mlmodel, .pb"))
+                }
+            }
+
+            // Sync imported classes into project classes table if missing
+            if (classLabelsJson != "[]") {
+                try {
+                    val labelsArr = org.json.JSONArray(classLabelsJson)
+                    val existingClasses = dao.getClassesForProjectDirect(projectId)
+                    val existingNames = existingClasses.map { it.className.lowercase(Locale.ROOT) }.toSet()
+
+                    val defaultPalette = listOf("#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#06B6D4", "#84CC16", "#F97316", "#6366F1")
+                    for (i in 0 until labelsArr.length()) {
+                        val cName = labelsArr.getString(i).trim()
+                        if (cName.isNotBlank() && !existingNames.contains(cName.lowercase(Locale.ROOT))) {
+                            val color = defaultPalette[i % defaultPalette.size]
+                            dao.insertClass(ClassificationClassEntity(projectId = projectId, className = cName, colorHex = color))
+                        }
+                    }
+                } catch (e: Exception) {
+                    AppLogger.e("ProjectRepository", "Error syncing imported model classes", e)
+                }
+            }
+
+            val finalClassCount = if (numClasses > 0) numClasses else dao.getClassesForProjectDirect(projectId).size.coerceAtLeast(1)
+
+            val modelEntity = TrainedModelEntity(
+                projectId = projectId,
+                numClasses = finalClassCount,
+                featureDim = featureDim,
+                weightsJson = "file:${targetWeightsFile.absolutePath}",
+                biasJson = biasJson,
+                classLabelsJson = classLabelsJson,
+                accuracy = accuracy,
+                trainedAt = System.currentTimeMillis(),
+                featureScaleMeansJson = scaleMeansJson,
+                featureScaleStdsJson = scaleStdsJson
+            )
+
+            val insertedId = dao.insertTrainedModel(modelEntity)
+            val savedModel = modelEntity.copy(id = insertedId)
+
+            // Update project status
+            val proj = dao.getProjectByIdDirect(projectId)
+            if (proj != null) {
+                dao.updateProject(
+                    proj.copy(
+                        isTrained = true,
+                        trainedAt = System.currentTimeMillis(),
+                        trainingAccuracy = accuracy
+                    )
+                )
+            }
+
+            Result.success(savedModel)
+        } catch (e: Exception) {
+            AppLogger.e("ProjectRepository", "Error importing model file", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun getFileNameFromUri(uri: Uri): String? {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0) {
+                        result = it.getString(nameIndex)
+                    }
+                }
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != null && cut != -1) {
+                result = result?.substring(cut + 1)
+            }
+        }
+        return result
+    }
+
     suspend fun generateDialogueReply(
         projectId: Long,
         userPrompt: String,
-        tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT
+        tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT,
+        engineMode: TextModelEngine.TextChatEngineMode = TextModelEngine.TextChatEngineMode.INSTRUCT_EXPERT,
+        selectedModelId: Long? = null
     ): TextModelEngine.TextChatMessage = withContext(Dispatchers.Default) {
         val startMs = System.currentTimeMillis()
-        val prediction = predictText(projectId, userPrompt, tokenLimit)
+
+        // 1. Get model to use (either specific selected checkpoint or latest)
+        val model = if (selectedModelId != null) {
+            dao.getTrainedModelByIdDirect(selectedModelId) ?: dao.getLatestTrainedModelDirect(projectId)
+        } else {
+            dao.getLatestTrainedModelDirect(projectId)
+        }
+
+        val prediction = if (model != null) {
+            val trainer = getOrLoadTrainer(model, projectId)
+            val tokenRes = TextModelEngine.tokenize(userPrompt, tokenLimit)
+            val rawFeatures = TextModelEngine.extractTextFeatures(userPrompt, tokenLimit)
+            val predResult = trainer.predict(rawFeatures)
+            val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+            val salient = if (predResult.classIndex in 0 until model.numClasses && predResult.classIndex < trainer.weights.size) {
+                val wSlice = trainer.weights[predResult.classIndex]
+                TextModelEngine.computeSalientTokens(tokenRes.tokens, wSlice)
+            } else emptyList()
+            TextModelEngine.TextPrediction(
+                classIndex = predResult.classIndex,
+                classLabel = predResult.classLabel,
+                confidence = predResult.confidence,
+                allProbabilities = predResult.allProbabilities,
+                inferenceTimeMs = elapsedMs,
+                tokenCount = tokenRes.tokenCount,
+                tokenLimit = tokenLimit,
+                salientTokens = salient,
+                energyMicroJoules = 10f
+            )
+        } else {
+            predictText(projectId, userPrompt, tokenLimit)
+        }
 
         val classes = dao.getClassesForProjectDirect(projectId)
         val matchedClass = classes.find { it.className.equals(prediction.classLabel, ignoreCase = true) }
 
+        val searchLimit = when (engineMode) {
+            TextModelEngine.TextChatEngineMode.INSTRUCT_EXPERT -> 400
+            TextModelEngine.TextChatEngineMode.EXACT_RETRIEVER -> 500
+            TextModelEngine.TextChatEngineMode.BALANCED_DIALOGUE -> 250
+            TextModelEngine.TextChatEngineMode.FAST_FLOW -> 100
+        }
+
         val classSamples = if (matchedClass != null) {
-            dao.getTextSamplesForClassDirect(matchedClass.id, limit = 250)
+            dao.getTextSamplesForClassDirect(matchedClass.id, limit = searchLimit)
         } else {
             emptyList()
         }
 
-        val promptWords = userPrompt.lowercase(Locale.ROOT)
+        val promptLower = userPrompt.lowercase(Locale.ROOT)
+        val promptWords = promptLower
             .split(Regex("[\\s,;:.!?\"'()\\[\\]{}]+"))
             .filter { it.length > 2 }
             .toSet()
+
+        val wantsTable = promptLower.contains("table") || promptLower.contains("excel") || promptLower.contains("column") || promptLower.contains("|") || promptLower.contains("row")
+        val wantsCode = promptLower.contains("code") || promptLower.contains("scala") || promptLower.contains("python") || promptLower.contains("snippet") || promptLower.contains("function") || promptLower.contains("class") || promptLower.contains("algorithm")
 
         val bestReply = if (classSamples.isNotEmpty()) {
             var topSample = classSamples.first()
@@ -1882,7 +2113,7 @@ class ProjectRepository(
             for (sample in classSamples) {
                 val rawContent = sample.textContent
                 val splitIdx = rawContent.indexOf('\n')
-                val matchTarget = if (splitIdx in 1..300) rawContent.substring(0, splitIdx) else rawContent
+                val matchTarget = if (splitIdx in 1..400) rawContent.substring(0, splitIdx) else rawContent
 
                 val targetWords = matchTarget.lowercase(Locale.ROOT)
                     .split(Regex("[\\s,;:.!?\"'()\\[\\]{}]+"))
@@ -1890,7 +2121,29 @@ class ProjectRepository(
                     .toSet()
 
                 val overlap = promptWords.intersect(targetWords).size
-                val score = (overlap * 3.5f) - (kotlin.math.abs(rawContent.length - 120) * 0.001f)
+
+                val hasTable = rawContent.contains("|") && rawContent.count { it == '|' } >= 4
+                val hasCode = rawContent.contains("```")
+
+                var bonus = 0f
+                if (wantsTable && hasTable) bonus += 5.0f
+                if (wantsCode && hasCode) bonus += 5.0f
+
+                val score = when (engineMode) {
+                    TextModelEngine.TextChatEngineMode.INSTRUCT_EXPERT -> {
+                        val structureBonus = if (hasTable || hasCode) 2.0f else 0f
+                        (overlap * 4.5f) + bonus + structureBonus - (kotlin.math.abs(rawContent.length - 250) * 0.0003f)
+                    }
+                    TextModelEngine.TextChatEngineMode.EXACT_RETRIEVER -> {
+                        (overlap * 6.0f) + bonus - (kotlin.math.abs(rawContent.length - 150) * 0.001f)
+                    }
+                    TextModelEngine.TextChatEngineMode.BALANCED_DIALOGUE -> {
+                        (overlap * 3.5f) + bonus - (kotlin.math.abs(rawContent.length - 120) * 0.001f)
+                    }
+                    TextModelEngine.TextChatEngineMode.FAST_FLOW -> {
+                        (overlap * 2.5f) + bonus
+                    }
+                }
 
                 if (score > maxScore) {
                     maxScore = score
@@ -1901,6 +2154,8 @@ class ProjectRepository(
             val chosenContent = topSample.textContent.trim()
             val newlineIdx = chosenContent.indexOf('\n')
             if (newlineIdx in 1 until chosenContent.length - 1) {
+                val firstLine = chosenContent.substring(0, newlineIdx).trim().lowercase(Locale.ROOT)
+                // If first line was an instruction or prompt header, extract the body
                 val candidateAnswer = chosenContent.substring(newlineIdx + 1).trim()
                 if (candidateAnswer.isNotBlank()) candidateAnswer else chosenContent
             } else {
@@ -1913,16 +2168,24 @@ class ProjectRepository(
         val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(2L)
         val salientWords = prediction.salientTokens.map { it.first }
 
+        val modelTag = if (model != null) "Model v${model.id}" else "On-Device AI"
+        val senderLabel = if (prediction.classLabel.isNotBlank() && prediction.classLabel != "No Model") {
+            "${prediction.classLabel} • $modelTag"
+        } else {
+            modelTag
+        }
+
         TextModelEngine.TextChatMessage(
             isUser = false,
             text = bestReply,
-            senderName = if (prediction.classLabel.isNotBlank() && prediction.classLabel != "No Model") prediction.classLabel else "Trained Model",
+            senderName = senderLabel,
             timestampMs = System.currentTimeMillis(),
             predictedClass = prediction.classLabel,
             confidence = prediction.confidence,
             latencyMs = elapsedMs,
             salientKeywords = salientWords,
-            classProbabilities = prediction.allProbabilities
+            classProbabilities = prediction.allProbabilities,
+            engineMode = engineMode.name
         )
     }
 
