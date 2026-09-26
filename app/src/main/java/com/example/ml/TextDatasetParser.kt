@@ -220,13 +220,20 @@ object TextDatasetParser {
     }
 
     private fun detectBestStrategy(previewLines: List<String>): DatasetFormatStrategy {
+        val combinedPreview = previewLines.joinToString("\n").lowercase(Locale.ROOT)
         val firstLine = previewLines.first().trim()
 
-        // 1. JSON / JSONL
-        if (firstLine.startsWith("{") && (firstLine.contains("\"instruction\"") || firstLine.contains("\"category\"") || firstLine.contains("\"label\"") || firstLine.contains("\"text\"") || firstLine.contains("\"response\""))) {
-            return DatasetFormatStrategy.INSTRUCTION_RESPONSE
-        }
-        if (firstLine.startsWith("[") && firstLine.contains("{")) {
+        // 1. JSON / JSONL / Alpaca / Dolly / Instruction / SQuAD
+        if (combinedPreview.contains("\"instruction\"") ||
+            combinedPreview.contains("\"response\"") ||
+            combinedPreview.contains("\"output\"") ||
+            combinedPreview.contains("\"messages\"") ||
+            combinedPreview.contains("\"conversations\"") ||
+            (combinedPreview.contains("{") && combinedPreview.contains("\"text\"")) ||
+            (combinedPreview.contains("{") && combinedPreview.contains("\"label\"")) ||
+            (firstLine.startsWith("[") && combinedPreview.contains("{")) ||
+            (firstLine.startsWith("{") && combinedPreview.contains(":"))
+        ) {
             return DatasetFormatStrategy.INSTRUCTION_RESPONSE
         }
 
@@ -258,7 +265,7 @@ object TextDatasetParser {
             return DatasetFormatStrategy.CSV_LABEL_TEXT
         }
 
-        return DatasetFormatStrategy.SHAKESPEARE_DIALOGUE
+        return DatasetFormatStrategy.INSTRUCTION_RESPONSE
     }
 
     private fun parseQaCsvStream(
@@ -331,14 +338,19 @@ object TextDatasetParser {
         val samples = mutableListOf<ParsedSample>()
         var lineNum = 0L
 
+        val objectBuffer = StringBuilder()
+        var braceDepth = 0
+        var inString = false
+        var isEscaped = false
+
         var line: String?
         while (reader.readLine().also { line = it } != null) {
             lineNum++
             val l = line?.trim() ?: continue
             if (l.isEmpty()) continue
 
-            // 1. JSON Array of objects (e.g. Alpaca / Dolly JSON array)
-            if (l.startsWith("[") && l.endsWith("]")) {
+            // 1. Fast path for single-line JSON Array of objects (e.g. [{"instruction":"..."}])
+            if (braceDepth == 0 && l.startsWith("[") && l.endsWith("]")) {
                 try {
                     val arr = JSONArray(l)
                     for (i in 0 until arr.length()) {
@@ -352,20 +364,60 @@ object TextDatasetParser {
                 continue
             }
 
-            // 2. Single line JSON (JSONL) or root JSON object
-            if (l.startsWith("{")) {
-                try {
-                    val obj = JSONObject(l)
-                    // Check if SQuAD format with "data" array
-                    if (obj.has("data") && obj.optJSONArray("data") != null) {
-                        extractSquadSamples(obj.getJSONArray("data"), samples, maxSampleCap)
-                    } else {
-                        extractSamplesFromJson(obj).forEach { sample ->
-                            samples.add(sample)
-                            if (samples.size >= maxSampleCap) return buildJsonResult(samples, lineNum, maxSampleCap)
+            // 2. Stream single-line or multi-line JSON objects/arrays (Alpaca, Dolly, SQuAD, etc.)
+            for (i in l.indices) {
+                val c = l[i]
+                if (isEscaped) {
+                    isEscaped = false
+                    if (braceDepth > 0) objectBuffer.append(c)
+                    continue
+                }
+                if (c == '\\') {
+                    isEscaped = true
+                    if (braceDepth > 0) objectBuffer.append(c)
+                    continue
+                }
+                if (c == '\"') {
+                    inString = !inString
+                    if (braceDepth > 0) objectBuffer.append(c)
+                    continue
+                }
+
+                if (!inString) {
+                    if (c == '{') {
+                        braceDepth++
+                        if (braceDepth == 1) {
+                            objectBuffer.clear()
                         }
+                        objectBuffer.append(c)
+                    } else if (c == '}') {
+                        if (braceDepth > 0) {
+                            braceDepth--
+                            objectBuffer.append(c)
+                            if (braceDepth == 0) {
+                                try {
+                                    val obj = JSONObject(objectBuffer.toString())
+                                    if (obj.has("data") && obj.optJSONArray("data") != null) {
+                                        extractSquadSamples(obj.getJSONArray("data"), samples, maxSampleCap)
+                                    } else {
+                                        extractSamplesFromJson(obj).forEach { sample ->
+                                            samples.add(sample)
+                                            if (samples.size >= maxSampleCap) return buildJsonResult(samples, lineNum, maxSampleCap)
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                                objectBuffer.clear()
+                            }
+                        }
+                    } else if (braceDepth > 0) {
+                        objectBuffer.append(c)
                     }
-                } catch (_: Exception) {}
+                } else if (braceDepth > 0) {
+                    objectBuffer.append(c)
+                }
+            }
+            if (braceDepth > 0) {
+                objectBuffer.append('\n')
             }
 
             if (lineNum % 500 == 0L) {
