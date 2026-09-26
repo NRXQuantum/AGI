@@ -351,6 +351,14 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun autoClusterProjectClasses(onResult: (String) -> Unit) {
+        val pId = _selectedProjectId.value ?: return
+        viewModelScope.launch {
+            val result = repository.autoClusterProjectClasses(pId)
+            onResult(result)
+        }
+    }
+
     fun predictText(text: String, tokenLimit: Int = TextModelEngine.DEFAULT_TOKEN_LIMIT) {
         val pId = _selectedProjectId.value ?: return
         if (text.isBlank()) {

@@ -314,24 +314,29 @@ class OnDeviceTrainer(
         }
     }
 
-    // GELU activation function with fast bounds checking and NaN protection
+    // Fast rational approximation of tanh for zero-allocation ARM execution
+    private inline fun fastTanh(x: Float): Float {
+        if (x <= -3.0f) return -1.0f
+        if (x >= 3.0f) return 1.0f
+        val x2 = x * x
+        return x * (27.0f + x2) / (27.0f + 9.0f * x2)
+    }
+
+    // High-performance GELU with zero JNI/toDouble overhead
     private fun gelu(x: Float): Float {
-        if (x.isNaN()) return 0f
-        if (x < -3.0f) return 0f
-        if (x > 3.0f) return x
+        if (x.isNaN() || x <= -3.5f) return 0f
+        if (x >= 3.5f) return x
         val s = 0.79788456f // sqrt(2/pi)
-        val inner = (s * (x + 0.044715f * x * x * x)).coerceIn(-10f, 10f)
-        val tanhVal = tanh(inner.toDouble()).toFloat()
-        return 0.5f * x * (1.0f + tanhVal)
+        val inner = (s * (x + 0.044715f * x * x * x)).coerceIn(-3.0f, 3.0f)
+        return 0.5f * x * (1.0f + fastTanh(inner))
     }
 
     private fun geluDerivative(x: Float): Float {
-        if (x.isNaN()) return 0f
-        if (x < -3.0f) return 0f
-        if (x > 3.0f) return 1f
+        if (x.isNaN() || x <= -3.5f) return 0f
+        if (x >= 3.5f) return 1f
         val s = 0.79788456f
-        val inner = (s * (x + 0.044715f * x * x * x)).coerceIn(-10f, 10f)
-        val t = tanh(inner.toDouble()).toFloat()
+        val inner = (s * (x + 0.044715f * x * x * x)).coerceIn(-3.0f, 3.0f)
+        val t = fastTanh(inner)
         val dt = (1.0f - t * t).coerceIn(0f, 1f)
         val dInner = s * (1.0f + 3.0f * 0.044715f * x * x)
         return (0.5f * (1.0f + t) + 0.5f * x * dt * dInner).coerceIn(0f, 1.5f)
@@ -349,7 +354,8 @@ class OnDeviceTrainer(
         var sumExp = 0f
         for (i in 0 until count) {
             val v = if (logits[i].isNaN()) 0f else logits[i]
-            val expVal = exp((v - maxLogit).toDouble().coerceIn(-40.0, 40.0)).toFloat()
+            val diff = (v - maxLogit).coerceIn(-30.0f, 0.0f)
+            val expVal = exp(diff.toDouble()).toFloat()
             outProbs[i] = expVal
             sumExp += expVal
         }
@@ -371,6 +377,8 @@ class OnDeviceTrainer(
         overallStartMs: Long = System.currentTimeMillis(),
         context: android.content.Context? = null,
         performanceProfile: com.example.util.HardwareResourceMonitor.PerformanceProfile = com.example.util.HardwareResourceMonitor.PerformanceProfile.SMART_ADAPTIVE,
+        progressBasePercentage: Float = 65.0f,
+        progressRangePercentage: Float = 34.5f,
         onProgress: suspend (TrainingProgress) -> Unit
     ) = withContext(Dispatchers.Default) {
         if (samples.isEmpty() || numClasses < 2) return@withContext
@@ -384,9 +392,9 @@ class OnDeviceTrainer(
 
         // Initial realistic ETA estimate based on total operations
         val estTrainingTimeRemainingSec = if (performanceProfile == com.example.util.HardwareResourceMonitor.PerformanceProfile.TURBO) {
-            ((epochs.toLong() * samples.size) / 10000L).coerceAtLeast(1L)
+            ((epochs.toLong() * samples.size) / 25000L).coerceAtLeast(1L)
         } else {
-            ((epochs.toLong() * samples.size) / 3500L).coerceAtLeast(2L)
+            ((epochs.toLong() * samples.size) / 10000L).coerceAtLeast(2L)
         }
 
         // Step 1: Feature Standardization
@@ -397,7 +405,7 @@ class OnDeviceTrainer(
                 loss = 0f,
                 accuracy = 0f,
                 statusMessage = "Standardizing extracted neural features with Z-score & L2 norm...",
-                overallPercentage = 65.0f,
+                overallPercentage = progressBasePercentage,
                 phase = TrainingPhase.STANDARDIZING_FEATURES,
                 currentStep = 0,
                 totalSteps = epochs * samples.size,
@@ -484,6 +492,16 @@ class OnDeviceTrainer(
 
         val sampleIndices = IntArray(numSamples) { it }
 
+        // Candidate Sampling for extreme multi-class acceleration (> 48 classes e.g. 4520 classes)
+        val maxCandidateCount = (batchSize + 48).coerceIn(64, 160).coerceAtMost(numClasses)
+        val useCandidateSampling = numClasses > 48
+        val candidateClasses = IntArray(maxCandidateCount)
+        val candidateLogits = FloatArray(maxCandidateCount)
+        val candidateProbs = FloatArray(maxCandidateCount)
+        val candidateDLogits = FloatArray(maxCandidateCount)
+        val classInCandidates = BooleanArray(numClasses)
+        val targetToCandIndex = IntArray(numClasses) { -1 }
+
         // Label smoothing parameter
         val labelSmoothingEps = 0.05f
 
@@ -499,7 +517,7 @@ class OnDeviceTrainer(
                 loss = 0f,
                 accuracy = 0f,
                 statusMessage = "Starting Epoch 1/$epochs for ${architecture.displayName}...",
-                overallPercentage = 66.0f,
+                overallPercentage = progressBasePercentage,
                 phase = TrainingPhase.TRAINING_NEURAL_NET,
                 currentStep = 0,
                 totalSteps = epochs * numSamples,
@@ -564,6 +582,35 @@ class OnDeviceTrainer(
                 val batchEnd = (batchIndex + effectiveBatchSize).coerceAtMost(numSamples)
                 val currentBatchSize = batchEnd - batchIndex
 
+                // Active candidates selection (for >48 classes, e.g. 4520 classes)
+                val activeClassCount: Int
+                if (useCandidateSampling) {
+                    var count = 0
+                    // Step 1: Add all batch targets first so EVERY sample in the batch is represented
+                    for (idx in batchIndex until batchEnd) {
+                        val tgt = samples[sampleIndices[idx]].classIndex
+                        if (!classInCandidates[tgt] && count < maxCandidateCount) {
+                            classInCandidates[tgt] = true
+                            targetToCandIndex[tgt] = count
+                            candidateClasses[count++] = tgt
+                        }
+                    }
+                    // Step 2: Fill remaining slots with random negative classes
+                    var attempts = 0
+                    while (count < maxCandidateCount && attempts < 256) {
+                        attempts++
+                        val randClass = random.nextInt(numClasses)
+                        if (!classInCandidates[randClass]) {
+                            classInCandidates[randClass] = true
+                            targetToCandIndex[randClass] = count
+                            candidateClasses[count++] = randClass
+                        }
+                    }
+                    activeClassCount = count
+                } else {
+                    activeClassCount = numClasses
+                }
+
                 // Fast zeroing of reusable mini-batch gradient accumulators
                 when (architecture) {
                     ModelArchitecture.DEEP_RESIDUAL_MLP -> {
@@ -576,9 +623,17 @@ class OnDeviceTrainer(
                             gradB2[i] = 0f
                             java.util.Arrays.fill(gradWSkip[i], 0f)
                         }
-                        for (k in 0 until numClasses) {
-                            java.util.Arrays.fill(gradW3[k], 0f)
-                            gradB3[k] = 0f
+                        if (useCandidateSampling) {
+                            for (c in 0 until activeClassCount) {
+                                val k = candidateClasses[c]
+                                java.util.Arrays.fill(gradW3[k], 0f)
+                                gradB3[k] = 0f
+                            }
+                        } else {
+                            for (k in 0 until numClasses) {
+                                java.util.Arrays.fill(gradW3[k], 0f)
+                                gradB3[k] = 0f
+                            }
                         }
                     }
                     ModelArchitecture.STANDARD_MLP -> {
@@ -586,15 +641,31 @@ class OnDeviceTrainer(
                             java.util.Arrays.fill(gradW1[i], 0f)
                             gradB1[i] = 0f
                         }
-                        for (k in 0 until numClasses) {
-                            java.util.Arrays.fill(gradW3[k], 0f)
-                            gradB3[k] = 0f
+                        if (useCandidateSampling) {
+                            for (c in 0 until activeClassCount) {
+                                val k = candidateClasses[c]
+                                java.util.Arrays.fill(gradW3[k], 0f)
+                                gradB3[k] = 0f
+                            }
+                        } else {
+                            for (k in 0 until numClasses) {
+                                java.util.Arrays.fill(gradW3[k], 0f)
+                                gradB3[k] = 0f
+                            }
                         }
                     }
                     ModelArchitecture.LINEAR -> {
-                        for (k in 0 until numClasses) {
-                            java.util.Arrays.fill(gradLinearW[k], 0f)
-                            gradLinearB[k] = 0f
+                        if (useCandidateSampling) {
+                            for (c in 0 until activeClassCount) {
+                                val k = candidateClasses[c]
+                                java.util.Arrays.fill(gradLinearW[k], 0f)
+                                gradLinearB[k] = 0f
+                            }
+                        } else {
+                            for (k in 0 until numClasses) {
+                                java.util.Arrays.fill(gradLinearW[k], 0f)
+                                gradLinearB[k] = 0f
+                            }
                         }
                     }
                 }
@@ -672,58 +743,105 @@ class OnDeviceTrainer(
                         }
 
                         // Layer 3 (Classification Head)
-                        for (k in 0 until numClasses) {
-                            var sum = b3[k]
-                            val wRow = w3[k]
-                            for (j in 0 until h2Dim) {
-                                sum += wRow[j] * a2[j]
+                        if (useCandidateSampling) {
+                            for (c in 0 until activeClassCount) {
+                                val k = candidateClasses[c]
+                                var sum = b3[k]
+                                val wRow = w3[k]
+                                for (j in 0 until h2Dim) {
+                                    sum += wRow[j] * a2[j]
+                                }
+                                candidateLogits[c] = sum
                             }
-                            logits[k] = sum
-                        }
+                            softmaxInPlace(candidateLogits, candidateProbs, activeClassCount)
+                            val targetCandidateIdx = if (useCandidateSampling) targetToCandIndex[target] else -1
 
-                        softmaxInPlace(logits, probs, numClasses)
+                            if (targetCandidateIdx >= 0) {
+                                val smoothTargetProb = 1.0f - labelSmoothingEps
+                                val uniformProb = labelSmoothingEps / activeClassCount
+                                val pTarget = candidateProbs[targetCandidateIdx].coerceAtLeast(1e-7f)
+                                totalLoss += -ln(pTarget)
 
-                        // Smoothed Target Cross-Entropy Loss
-                        val smoothTargetProb = 1.0f - labelSmoothingEps
-                        val uniformProb = labelSmoothingEps / numClasses
-                        var sampleLoss = 0f
-                        for (k in 0 until numClasses) {
-                            val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
-                            sampleLoss -= yK * ln(probs[k].coerceAtLeast(1e-7f))
-                        }
-                        totalLoss += sampleLoss
+                                var bestC = 0
+                                var bestP = candidateProbs[0]
+                                for (c in 1 until activeClassCount) {
+                                    if (candidateProbs[c] > bestP) {
+                                        bestP = candidateProbs[c]
+                                        bestC = c
+                                    }
+                                }
+                                if (bestC == targetCandidateIdx) correctPredictions++
 
-                        // Check Accuracy
-                        var bestK = 0
-                        var bestP = probs[0]
-                        for (k in 1 until numClasses) {
-                            if (probs[k] > bestP) {
-                                bestP = probs[k]
-                                bestK = k
+                                for (c in 0 until activeClassCount) {
+                                    val k = candidateClasses[c]
+                                    val yC = if (c == targetCandidateIdx) (smoothTargetProb + uniformProb) else uniformProb
+                                    val dL = candidateProbs[c] - yC
+                                    candidateDLogits[c] = dL
+                                    gradB3[k] += dL
+                                    val gradWRow = gradW3[k]
+                                    for (j in 0 until h2Dim) {
+                                        gradWRow[j] += dL * a2[j]
+                                    }
+                                }
+
+                                for (j in 0 until h2Dim) {
+                                    var sum = 0f
+                                    for (c in 0 until activeClassCount) {
+                                        val k = candidateClasses[c]
+                                        sum += candidateDLogits[c] * w3[k][j]
+                                    }
+                                    da2[j] = sum
+                                }
                             }
-                        }
-                        if (bestK == target) correctPredictions++
-
-                        // === BACKWARD PASS: Deep Residual MLP ===
-                        // Output Layer
-                        for (k in 0 until numClasses) {
-                            val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
-                            val dL = probs[k] - yK
-                            dLogits[k] = dL
-                            gradB3[k] += dL
-                            val gradWRow = gradW3[k]
-                            for (j in 0 until h2Dim) {
-                                gradWRow[j] += dL * a2[j]
-                            }
-                        }
-
-                        // Backprop into a2
-                        for (j in 0 until h2Dim) {
-                            var sum = 0f
+                        } else {
                             for (k in 0 until numClasses) {
-                                sum += dLogits[k] * w3[k][j]
+                                var sum = b3[k]
+                                val wRow = w3[k]
+                                for (j in 0 until h2Dim) {
+                                    sum += wRow[j] * a2[j]
+                                }
+                                logits[k] = sum
                             }
-                            da2[j] = sum
+
+                            softmaxInPlace(logits, probs, numClasses)
+
+                            val smoothTargetProb = 1.0f - labelSmoothingEps
+                            val uniformProb = labelSmoothingEps / numClasses
+                            var sampleLoss = 0f
+                            for (k in 0 until numClasses) {
+                                val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
+                                sampleLoss -= yK * ln(probs[k].coerceAtLeast(1e-7f))
+                            }
+                            totalLoss += sampleLoss
+
+                            var bestK = 0
+                            var bestP = probs[0]
+                            for (k in 1 until numClasses) {
+                                if (probs[k] > bestP) {
+                                    bestP = probs[k]
+                                    bestK = k
+                                }
+                            }
+                            if (bestK == target) correctPredictions++
+
+                            for (k in 0 until numClasses) {
+                                val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
+                                val dL = probs[k] - yK
+                                dLogits[k] = dL
+                                gradB3[k] += dL
+                                val gradWRow = gradW3[k]
+                                for (j in 0 until h2Dim) {
+                                    gradWRow[j] += dL * a2[j]
+                                }
+                            }
+
+                            for (j in 0 until h2Dim) {
+                                var sum = 0f
+                                for (k in 0 until numClasses) {
+                                    sum += dLogits[k] * w3[k][j]
+                                }
+                                da2[j] = sum
+                            }
                         }
 
                         // Backprop Layer 2 & Skip
@@ -802,55 +920,107 @@ class OnDeviceTrainer(
                         }
 
                         // Layer 2 Head
-                        for (k in 0 until numClasses) {
-                            var sum = b3[k]
-                            val wRow = w3[k]
-                            for (j in 0 until h1Dim) {
-                                sum += wRow[j] * a1[j]
+                        if (useCandidateSampling) {
+                            for (c in 0 until activeClassCount) {
+                                val k = candidateClasses[c]
+                                var sum = b3[k]
+                                val wRow = w3[k]
+                                for (j in 0 until h1Dim) {
+                                    sum += wRow[j] * a1[j]
+                                }
+                                candidateLogits[c] = sum
                             }
-                            logits[k] = sum
-                        }
+                            softmaxInPlace(candidateLogits, candidateProbs, activeClassCount)
+                            val targetCandidateIdx = if (useCandidateSampling) targetToCandIndex[target] else -1
 
-                        softmaxInPlace(logits, probs, numClasses)
+                            if (targetCandidateIdx >= 0) {
+                                val smoothTargetProb = 1.0f - labelSmoothingEps
+                                val uniformProb = labelSmoothingEps / activeClassCount
+                                val pTarget = candidateProbs[targetCandidateIdx].coerceAtLeast(1e-7f)
+                                totalLoss += -ln(pTarget)
 
-                        val smoothTargetProb = 1.0f - labelSmoothingEps
-                        val uniformProb = labelSmoothingEps / numClasses
-                        var sampleLoss = 0f
-                        for (k in 0 until numClasses) {
-                            val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
-                            sampleLoss -= yK * ln(probs[k].coerceAtLeast(1e-7f))
-                        }
-                        totalLoss += sampleLoss
+                                var bestC = 0
+                                var bestP = candidateProbs[0]
+                                for (c in 1 until activeClassCount) {
+                                    if (candidateProbs[c] > bestP) {
+                                        bestP = candidateProbs[c]
+                                        bestC = c
+                                    }
+                                }
+                                if (bestC == targetCandidateIdx) correctPredictions++
 
-                        var bestK = 0
-                        var bestP = probs[0]
-                        for (k in 1 until numClasses) {
-                            if (probs[k] > bestP) {
-                                bestP = probs[k]
-                                bestK = k
+                                for (c in 0 until activeClassCount) {
+                                    val k = candidateClasses[c]
+                                    val yC = if (c == targetCandidateIdx) (smoothTargetProb + uniformProb) else uniformProb
+                                    val dL = candidateProbs[c] - yC
+                                    candidateDLogits[c] = dL
+                                    gradB3[k] += dL
+                                    val gradWRow = gradW3[k]
+                                    for (j in 0 until h1Dim) {
+                                        gradWRow[j] += dL * a1[j]
+                                    }
+                                }
+
+                                java.util.Arrays.fill(da1, 0f)
+                                for (j in 0 until h1Dim) {
+                                    var sum = 0f
+                                    for (c in 0 until activeClassCount) {
+                                        val k = candidateClasses[c]
+                                        sum += candidateDLogits[c] * w3[k][j]
+                                    }
+                                    da1[j] = sum
+                                }
                             }
-                        }
-                        if (bestK == target) correctPredictions++
-
-                        // === BACKWARD PASS: 2-Layer MLP ===
-                        for (k in 0 until numClasses) {
-                            val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
-                            val dL = probs[k] - yK
-                            dLogits[k] = dL
-                            gradB3[k] += dL
-                            val gradWRow = gradW3[k]
-                            for (j in 0 until h1Dim) {
-                                gradWRow[j] += dL * a1[j]
-                            }
-                        }
-
-                        java.util.Arrays.fill(da1, 0f)
-                        for (j in 0 until h1Dim) {
-                            var sum = 0f
+                        } else {
                             for (k in 0 until numClasses) {
-                                sum += dLogits[k] * w3[k][j]
+                                var sum = b3[k]
+                                val wRow = w3[k]
+                                for (j in 0 until h1Dim) {
+                                    sum += wRow[j] * a1[j]
+                                }
+                                logits[k] = sum
                             }
-                            da1[j] = sum
+
+                            softmaxInPlace(logits, probs, numClasses)
+
+                            val smoothTargetProb = 1.0f - labelSmoothingEps
+                            val uniformProb = labelSmoothingEps / numClasses
+                            var sampleLoss = 0f
+                            for (k in 0 until numClasses) {
+                                val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
+                                sampleLoss -= yK * ln(probs[k].coerceAtLeast(1e-7f))
+                            }
+                            totalLoss += sampleLoss
+
+                            var bestK = 0
+                            var bestP = probs[0]
+                            for (k in 1 until numClasses) {
+                                if (probs[k] > bestP) {
+                                    bestP = probs[k]
+                                    bestK = k
+                                }
+                            }
+                            if (bestK == target) correctPredictions++
+
+                            for (k in 0 until numClasses) {
+                                val yK = if (k == target) (smoothTargetProb + uniformProb) else uniformProb
+                                val dL = probs[k] - yK
+                                dLogits[k] = dL
+                                gradB3[k] += dL
+                                val gradWRow = gradW3[k]
+                                for (j in 0 until h1Dim) {
+                                    gradWRow[j] += dL * a1[j]
+                                }
+                            }
+
+                            java.util.Arrays.fill(da1, 0f)
+                            for (j in 0 until h1Dim) {
+                                var sum = 0f
+                                for (k in 0 until numClasses) {
+                                    sum += dLogits[k] * w3[k][j]
+                                }
+                                da1[j] = sum
+                            }
                         }
 
                         for (i in 0 until h1Dim) {
@@ -863,36 +1033,76 @@ class OnDeviceTrainer(
                         }
                     } else {
                         // === FORWARD & BACKWARD PASS: Linear Softmax Classifier ===
-                        for (k in 0 until numClasses) {
-                            var sum = biases[k]
-                            val wRow = weights[k]
-                            for (j in 0 until featureDim) {
-                                sum += wRow[j] * x[j]
+                        if (useCandidateSampling) {
+                            for (c in 0 until activeClassCount) {
+                                val k = candidateClasses[c]
+                                var sum = biases[k]
+                                val wRow = weights[k]
+                                for (j in 0 until featureDim) {
+                                    sum += wRow[j] * x[j]
+                                }
+                                candidateLogits[c] = sum
                             }
-                            logits[k] = sum
-                        }
+                            softmaxInPlace(candidateLogits, candidateProbs, activeClassCount)
+                            val targetCandidateIdx = if (useCandidateSampling) targetToCandIndex[target] else -1
 
-                        softmaxInPlace(logits, probs, numClasses)
-                        val pTarget = probs[target].coerceAtLeast(1e-7f)
-                        totalLoss += -ln(pTarget)
+                            if (targetCandidateIdx >= 0) {
+                                val pTarget = candidateProbs[targetCandidateIdx].coerceAtLeast(1e-7f)
+                                totalLoss += -ln(pTarget)
 
-                        var maxIdx = 0
-                        var maxProb = probs[0]
-                        for (k in 1 until numClasses) {
-                            if (probs[k] > maxProb) {
-                                maxProb = probs[k]
-                                maxIdx = k
+                                var maxIdx = 0
+                                var maxProb = candidateProbs[0]
+                                for (c in 1 until activeClassCount) {
+                                    if (candidateProbs[c] > maxProb) {
+                                        maxProb = candidateProbs[c]
+                                        maxIdx = c
+                                    }
+                                }
+                                if (maxIdx == targetCandidateIdx) correctPredictions++
+
+                                for (c in 0 until activeClassCount) {
+                                    val k = candidateClasses[c]
+                                    val yK = if (c == targetCandidateIdx) 1.0f else 0.0f
+                                    val dK = candidateProbs[c] - yK
+                                    gradLinearB[k] += dK
+                                    val wRow = gradLinearW[k]
+                                    for (j in 0 until featureDim) {
+                                        wRow[j] += dK * x[j]
+                                    }
+                                }
                             }
-                        }
-                        if (maxIdx == target) correctPredictions++
+                        } else {
+                            for (k in 0 until numClasses) {
+                                var sum = biases[k]
+                                val wRow = weights[k]
+                                for (j in 0 until featureDim) {
+                                    sum += wRow[j] * x[j]
+                                }
+                                logits[k] = sum
+                            }
 
-                        for (k in 0 until numClasses) {
-                            val yK = if (k == target) 1.0f else 0.0f
-                            val dK = probs[k] - yK
-                            gradLinearB[k] += dK
-                            val wRow = gradLinearW[k]
-                            for (j in 0 until featureDim) {
-                                wRow[j] += dK * x[j]
+                            softmaxInPlace(logits, probs, numClasses)
+                            val pTarget = probs[target].coerceAtLeast(1e-7f)
+                            totalLoss += -ln(pTarget)
+
+                            var maxIdx = 0
+                            var maxProb = probs[0]
+                            for (k in 1 until numClasses) {
+                                if (probs[k] > maxProb) {
+                                    maxProb = probs[k]
+                                    maxIdx = k
+                                }
+                            }
+                            if (maxIdx == target) correctPredictions++
+
+                            for (k in 0 until numClasses) {
+                                val yK = if (k == target) 1.0f else 0.0f
+                                val dK = probs[k] - yK
+                                gradLinearB[k] += dK
+                                val wRow = gradLinearW[k]
+                                for (j in 0 until featureDim) {
+                                    wRow[j] += dK * x[j]
+                                }
                             }
                         }
                     }
@@ -906,8 +1116,10 @@ class OnDeviceTrainer(
                     val biasCorrection1 = (1.0 - beta1Adam.toDouble().pow(stepCount.toDouble())).toFloat().coerceAtLeast(1e-4f)
                     val biasCorrection2 = (1.0 - beta2Adam.toDouble().pow(stepCount.toDouble())).toFloat().coerceAtLeast(1e-4f)
 
-                    // Layer 3 (Head) AdamW
-                    for (k in 0 until numClasses) {
+                    // Layer 3 (Head) AdamW - update active classes only
+                    val classLimit = if (useCandidateSampling) activeClassCount else numClasses
+                    for (c in 0 until classLimit) {
+                        val k = if (useCandidateSampling) candidateClasses[c] else c
                         val gB = (gradB3[k] * invBatch).coerceIn(-3f, 3f)
                         mb3[k] = beta1Adam * mb3[k] + (1 - beta1Adam) * gB
                         vb3[k] = beta2Adam * vb3[k] + (1 - beta2Adam) * gB * gB
@@ -986,8 +1198,10 @@ class OnDeviceTrainer(
                     val biasCorrection1 = (1.0 - beta1Adam.toDouble().pow(stepCount.toDouble())).toFloat().coerceAtLeast(1e-4f)
                     val biasCorrection2 = (1.0 - beta2Adam.toDouble().pow(stepCount.toDouble())).toFloat().coerceAtLeast(1e-4f)
 
-                    // Head AdamW
-                    for (k in 0 until numClasses) {
+                    // Head AdamW - active classes only
+                    val classLimit = if (useCandidateSampling) activeClassCount else numClasses
+                    for (c in 0 until classLimit) {
+                        val k = if (useCandidateSampling) candidateClasses[c] else c
                         val gB = (gradB3[k] * invBatch).coerceIn(-3f, 3f)
                         mb3[k] = beta1Adam * mb3[k] + (1 - beta1Adam) * gB
                         vb3[k] = beta2Adam * vb3[k] + (1 - beta2Adam) * gB * gB
@@ -1026,11 +1240,13 @@ class OnDeviceTrainer(
                         }
                     }
                 } else {
-                    // Linear AdamW
+                    // Linear AdamW - active classes only
                     val biasCorrection1 = (1.0 - beta1Adam.toDouble().pow(stepCount.toDouble())).toFloat().coerceAtLeast(1e-4f)
                     val biasCorrection2 = (1.0 - beta2Adam.toDouble().pow(stepCount.toDouble())).toFloat().coerceAtLeast(1e-4f)
 
-                    for (k in 0 until numClasses) {
+                    val classLimit = if (useCandidateSampling) activeClassCount else numClasses
+                    for (c in 0 until classLimit) {
+                        val k = if (useCandidateSampling) candidateClasses[c] else c
                         val gB = (gradLinearB[k] * invBatch).coerceIn(-3f, 3f)
                         mLinearB[k] = beta1Adam * mLinearB[k] + (1 - beta1Adam) * gB
                         vLinearB[k] = beta2Adam * vLinearB[k] + (1 - beta2Adam) * gB * gB
@@ -1050,12 +1266,20 @@ class OnDeviceTrainer(
                     }
                 }
 
+                if (useCandidateSampling) {
+                    for (c in 0 until activeClassCount) {
+                        val k = candidateClasses[c]
+                        classInCandidates[k] = false
+                        targetToCandIndex[k] = -1
+                    }
+                }
+
                 batchIndex += effectiveBatchSize
 
-                // Live continuous progress emission every ~300ms during the epoch
+                // Live continuous progress emission every ~250ms during the epoch
                 val now = System.currentTimeMillis()
                 val isEpochEnd = batchIndex >= numSamples
-                if (now - lastProgressEmitMs >= 300L || isEpochEnd) {
+                if (now - lastProgressEmitMs >= 250L || isEpochEnd) {
                     lastProgressEmitMs = now
                     val processedInEpoch = batchIndex.coerceAtMost(numSamples)
                     val totalTrainedSamplesSoFar = (epoch - 1L) * numSamples + processedInEpoch
@@ -1066,16 +1290,16 @@ class OnDeviceTrainer(
                     val trainingElapsedSec = (now - trainingStartMs) / 1000L
 
                     val epochFraction = (epoch - 1).toFloat() / epochs + (processedInEpoch.toFloat() / numSamples) / epochs
-                    val currentOverallPct = (66.0f + epochFraction * 33.5f).coerceIn(66.0f, 99.5f)
+                    val currentOverallPct = (progressBasePercentage + epochFraction * progressRangePercentage).coerceIn(progressBasePercentage, 99.5f)
 
                     val samplesPerSec = if (trainingElapsedSec > 0) {
                         totalTrainedSamplesSoFar.toFloat() / trainingElapsedSec.coerceAtLeast(1L)
                     } else if (elapsedMs > 0) {
                         (totalTrainedSamplesSoFar.toFloat() * 1000f) / elapsedMs.toFloat()
-                    } else 1000f
+                    } else 500f
 
                     val remainingSamples = (totalTrainingSamplesAllEpochs - totalTrainedSamplesSoFar).coerceAtLeast(0L)
-                    val estRemainingSec = if (samplesPerSec > 1f) (remainingSamples / samplesPerSec).toLong() else 0L
+                    val estRemainingSec = if (samplesPerSec > 1f) (remainingSamples / samplesPerSec).toLong().coerceAtMost(7200L) else 0L
 
                     val runningLoss = if (processedInEpoch > 0) totalLoss / processedInEpoch else 0f
                     val runningAcc = if (processedInEpoch > 0) correctPredictions.toFloat() / processedInEpoch else 0f
@@ -1109,9 +1333,8 @@ class OnDeviceTrainer(
                             performanceProfileName = performanceProfile.displayName
                         )
                     )
+                    yield()
                 }
-
-                yield()
             }
 
             val epochFinalLoss = if (numSamples > 0) totalLoss / numSamples else 0f

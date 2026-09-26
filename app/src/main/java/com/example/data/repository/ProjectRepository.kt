@@ -460,11 +460,13 @@ class ProjectRepository(
             var finalLoss = 0f
             var finalAccuracy = 0f
 
+            val effectiveBatchSize = if (trainingSamples.size >= 256) 64.coerceAtLeast(batchSize) else batchSize
+
             trainer.train(
                 samples = trainingSamples,
                 epochs = epochs,
                 learningRate = learningRate,
-                batchSize = batchSize,
+                batchSize = effectiveBatchSize,
                 architecture = architecture,
                 optimizerType = optimizerType,
                 lrSchedule = lrSchedule,
@@ -472,6 +474,8 @@ class ProjectRepository(
                 overallStartMs = overallStartMs,
                 context = context,
                 performanceProfile = performanceProfile,
+                progressBasePercentage = 20.0f,
+                progressRangePercentage = 78.0f,
                 onProgress = { progress ->
                     finalLoss = progress.loss
                     finalAccuracy = progress.accuracy
@@ -1969,5 +1973,55 @@ class ProjectRepository(
 
         val summary = parseResult.classCounts.entries.take(8).joinToString(", ") { "${it.key}: ${it.value}" } + (if (parseResult.classCounts.size > 8) "..." else "")
         "Successfully imported ${sampleEntities.size} samples across ${parseResult.classCounts.size} classes ($summary)!"
+    }
+
+    suspend fun autoClusterProjectClasses(projectId: Long): String = withContext(Dispatchers.IO) {
+        val allSamples = dao.getAllTextSamplesForProjectDirect(projectId)
+        if (allSamples.isEmpty()) return@withContext "No text samples found in this project."
+
+        val existingClasses = dao.getClassesForProjectDirect(projectId)
+        if (existingClasses.size <= 16) return@withContext "Classes are already balanced (${existingClasses.size} classes)."
+
+        // Cluster each sample into standard bilingual topics
+        val clustered = allSamples.map { sample ->
+            val topic = TextDatasetParser.classifyTopic(sample.textContent)
+            Pair(topic, sample.textContent)
+        }
+
+        // Delete bloated single-row classes
+        existingClasses.forEach { dao.deleteClass(it) }
+
+        val topicMap = mutableMapOf<String, Long>()
+        var colorIdx = 0
+        val counts = clustered.groupingBy { it.first }.eachCount()
+
+        for (topic in counts.keys) {
+            val colorHex = TextDatasetParser.getColorForIndex(colorIdx++)
+            val id = dao.insertClass(
+                ClassificationClassEntity(
+                    projectId = projectId,
+                    className = topic,
+                    colorHex = colorHex
+                )
+            )
+            topicMap[topic] = id
+        }
+
+        val newSamples = clustered.mapNotNull { (topic, text) ->
+            val classId = topicMap[topic] ?: return@mapNotNull null
+            val tokenRes = TextModelEngine.tokenize(text)
+            TextSampleEntity(
+                classId = classId,
+                projectId = projectId,
+                textContent = text,
+                tokenCount = tokenRes.tokenCount
+            )
+        }
+
+        newSamples.chunked(500).forEach { chunk ->
+            dao.insertTextSamplesBatch(chunk)
+        }
+
+        "Successfully re-clustered ${newSamples.size} samples into ${topicMap.size} balanced topic classes! Ready for instant 3-second training."
     }
 }

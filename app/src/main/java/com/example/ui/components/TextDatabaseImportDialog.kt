@@ -78,19 +78,26 @@ fun TextDatabaseImportDialog(
     var minSampleThreshold by remember { mutableStateOf(1) }
     var excludedClasses by remember { mutableStateOf(setOf<String>()) }
     var isImporting by remember { mutableStateOf(false) }
+    var enableTopicClustering by remember { mutableStateOf(true) }
 
     // Benchmark Catalog Filter State
     var catalogCategoryFilter by remember { mutableStateOf("All") }
     var catalogSearchQuery by remember { mutableStateOf("") }
 
     // Active parse result (either from streaming file/ZIP or from text area)
-    val effectiveBaseResult = remember(streamingParseResult, rawText, selectedStrategy) {
-        if (streamingParseResult != null) {
+    val effectiveBaseResult = remember(streamingParseResult, rawText, selectedStrategy, enableTopicClustering) {
+        val base = if (streamingParseResult != null) {
             streamingParseResult
         } else if (rawText.isNotBlank()) {
             TextDatasetParser.parse(rawText, selectedStrategy)
         } else {
             null
+        }
+
+        if (base != null && enableTopicClustering && base.classCounts.size > 20) {
+            TextDatasetParser.clusterIntoTopics(base)
+        } else {
+            base
         }
     }
 
@@ -423,7 +430,9 @@ fun TextDatabaseImportDialog(
                                             } else {
                                                 excludedClasses + className
                                             }
-                                        }
+                                        },
+                                        enableTopicClustering = enableTopicClustering,
+                                        onToggleTopicClustering = { enableTopicClustering = it }
                                     )
                                 }
                             }
@@ -459,7 +468,9 @@ fun TextDatabaseImportDialog(
                                             } else {
                                                 excludedClasses + className
                                             }
-                                        }
+                                        },
+                                        enableTopicClustering = enableTopicClustering,
+                                        onToggleTopicClustering = { enableTopicClustering = it }
                                     )
                                 }
                             }
@@ -695,7 +706,9 @@ fun DatasetPreviewCard(
     minSampleThreshold: Int,
     onMinSampleChange: (Int) -> Unit,
     excludedClasses: Set<String>,
-    onToggleClass: (String) -> Unit
+    onToggleClass: (String) -> Unit,
+    enableTopicClustering: Boolean = true,
+    onToggleTopicClustering: ((Boolean) -> Unit)? = null
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -712,7 +725,8 @@ fun DatasetPreviewCard(
                 Text(
                     text = result.formatName,
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
                 )
 
                 Surface(
@@ -725,6 +739,39 @@ fun DatasetPreviewCard(
                         color = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     )
+                }
+            }
+
+            if (onToggleTopicClustering != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "🎯 Topic Clustering (১০টি বিষয়ভিত্তিক ক্লাস)",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = if (enableTopicClustering) "সুপারফাস্ট ট্রেনিং ও উচ্চ নির্ভুলতার জন্য ক্লাস্টার সক্রিয়" else "প্রতিটি ভিন্ন লাইনের জন্য আলাদা ক্লাস",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = enableTopicClustering,
+                            onCheckedChange = onToggleTopicClustering
+                        )
+                    }
                 }
             }
 
