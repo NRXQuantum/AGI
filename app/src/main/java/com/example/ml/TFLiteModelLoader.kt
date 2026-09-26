@@ -656,10 +656,13 @@ class TFLiteModelLoader(
                             (bytes[0] == 'C'.code.toByte() && bytes[1] == 'M'.code.toByte())
                             )) {
                     val payloadLen = ByteBuffer.wrap(bytes, 4, 4).order(ByteOrder.LITTLE_ENDIAN).int
-                    val safeLen = payloadLen.coerceIn(0, min(1024 * 1024 * 4, bytes.size - 8))
+                    val safeLen = payloadLen.coerceIn(0, min(1024 * 1024 * 8, bytes.size - 8))
                     jsonPayload = String(bytes, 8, safeLen, Charsets.UTF_8)
-                } else if (!isTFLite && bytes[0] == '{'.code.toByte() && bytes.size < 1024 * 1024 * 3) {
-                    jsonPayload = String(bytes, Charsets.UTF_8)
+                } else if (!isTFLite) {
+                    val rawStr = String(bytes, Charsets.UTF_8).trim()
+                    if (rawStr.isNotEmpty()) {
+                        jsonPayload = rawStr
+                    }
                 }
 
                 parseModelFromPayload(
@@ -685,49 +688,71 @@ class TFLiteModelLoader(
             var parsedScaler: FeatureScaler? = null
 
             if (!jsonPayload.isNullOrBlank()) {
-                try {
-                    val json = JSONObject(jsonPayload)
-                    parsedNumClasses = json.optInt("num_classes", 0)
-                    parsedFeatureDim = json.optInt("feature_dim", 128)
+                val trimmed = jsonPayload.trim()
+                if (trimmed.startsWith("{")) {
+                    try {
+                        val json = JSONObject(trimmed)
+                        parsedNumClasses = json.optInt("num_classes", 0)
+                        parsedFeatureDim = json.optInt("feature_dim", 128)
 
-                    val labelsArr = json.optJSONArray("class_labels")
-                        ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("classLabels")
-                        ?: json.optJSONArray("classes")
-                        ?: JSONArray()
+                        val labelsArr = json.optJSONArray("class_labels")
+                            ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("classLabels")
+                            ?: json.optJSONArray("classes")
+                            ?: JSONArray()
 
-                    for (i in 0 until labelsArr.length()) {
-                        parsedLabels.add(labelsArr.getString(i))
-                    }
-                    if (parsedNumClasses <= 0) {
-                        parsedNumClasses = max(1, parsedLabels.size)
-                    }
+                        for (i in 0 until labelsArr.length()) {
+                            parsedLabels.add(labelsArr.getString(i))
+                        }
+                        if (parsedNumClasses <= 0) {
+                            parsedNumClasses = max(1, parsedLabels.size)
+                        }
 
-                    val weightsObj = json.optJSONObject("weights")
-                    val weightsArr = json.optJSONArray("weights")
-                        ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("weights")
-                    val weightsJsonStr = weightsObj?.toString() ?: weightsArr?.toString() ?: "{}"
+                        val weightsObj = json.optJSONObject("weights")
+                        val weightsArr = json.optJSONArray("weights")
+                            ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("weights")
+                        val weightsRawStr = json.optString("weights", "")
+                        val weightsJsonStr = weightsObj?.toString()
+                            ?: weightsArr?.toString()
+                            ?: if (weightsRawStr.isNotBlank()) weightsRawStr else "{}"
 
-                    val biasesObj = json.optJSONObject("biases")
-                    val biasesArr = json.optJSONArray("biases")
-                        ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("biases")
-                    val biasesJsonStr = biasesObj?.toString() ?: biasesArr?.toString() ?: "[]"
+                        val biasesObj = json.optJSONObject("biases")
+                        val biasesArr = json.optJSONArray("biases")
+                            ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("biases")
+                        val biasesJsonStr = biasesObj?.toString() ?: biasesArr?.toString() ?: "[]"
 
-                    val scaleMeansArr = json.optJSONArray("scale_means")
-                        ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("scale_means")
-                    val scaleStdsArr = json.optJSONArray("scale_stds")
-                        ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("scale_stds")
+                        val scaleMeansArr = json.optJSONArray("scale_means")
+                            ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("scale_means")
+                        val scaleStdsArr = json.optJSONArray("scale_stds")
+                            ?: json.optJSONObject("neuralNetworkClassifier")?.optJSONArray("scale_stds")
 
-                    parsedTrainer = OnDeviceTrainer.loadFromModel(
-                        weightsJson = weightsJsonStr,
-                        biasesJson = biasesJsonStr,
-                        labelsJson = labelsArr.toString(),
-                        numClasses = parsedNumClasses,
-                        featureDim = parsedFeatureDim,
-                        scaleMeansJson = scaleMeansArr?.toString(),
-                        scaleStdsJson = scaleStdsArr?.toString()
-                    )
-                    parsedScaler = parsedTrainer.scaler
-                } catch (_: Throwable) {}
+                        parsedTrainer = OnDeviceTrainer.loadFromModel(
+                            weightsJson = weightsJsonStr,
+                            biasesJson = biasesJsonStr,
+                            labelsJson = if (parsedLabels.isNotEmpty()) labelsArr.toString() else "[]",
+                            numClasses = parsedNumClasses,
+                            featureDim = parsedFeatureDim,
+                            scaleMeansJson = scaleMeansArr?.toString(),
+                            scaleStdsJson = scaleStdsArr?.toString()
+                        )
+                        parsedScaler = parsedTrainer.scaler
+                    } catch (_: Throwable) {}
+                } else {
+                    // Raw array or comma-separated numbers (e.g., "0.09545351,0.13480908..." or "[...]")
+                    try {
+                        val fallbackClasses = listOf("Class #1", "Class #2")
+                        parsedTrainer = OnDeviceTrainer.loadFromModel(
+                            weightsJson = trimmed,
+                            biasesJson = "[]",
+                            labelsJson = "[\"Class #1\", \"Class #2\"]",
+                            numClasses = 2,
+                            featureDim = 128
+                        )
+                        parsedNumClasses = 2
+                        parsedFeatureDim = 128
+                        parsedLabels.addAll(fallbackClasses)
+                        parsedScaler = parsedTrainer.scaler
+                    } catch (_: Throwable) {}
+                }
             }
 
             if (parsedLabels.isEmpty() && directBuffer != null) {

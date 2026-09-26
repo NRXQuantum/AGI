@@ -1786,16 +1786,34 @@ class OnDeviceTrainer(
             val resolvedStds = if (scaleStdsJson != null) resolveJsonFromFileIfNeeded(scaleStdsJson) else null
 
             val labelsList = mutableListOf<String>()
-            val labelsArray = JSONArray(resolvedLabels)
-            for (i in 0 until labelsArray.length()) {
-                labelsList.add(labelsArray.getString(i))
+            try {
+                if (resolvedLabels.trim().startsWith("[")) {
+                    val labelsArray = JSONArray(resolvedLabels)
+                    for (i in 0 until labelsArray.length()) {
+                        labelsList.add(labelsArray.getString(i))
+                    }
+                } else if (resolvedLabels.isNotBlank() && resolvedLabels.contains(",")) {
+                    resolvedLabels.split(",").map { it.trim().removeSurrounding("\"") }.filter { it.isNotEmpty() }.forEach {
+                        labelsList.add(it)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val effectiveNumClasses = if (numClasses > 0) numClasses else maxOf(labelsList.size, 1)
+            val effectiveFeatureDim = if (featureDim > 0) featureDim else 128
+
+            if (labelsList.isEmpty()) {
+                for (i in 0 until effectiveNumClasses) {
+                    labelsList.add("Class #${i + 1}")
+                }
             }
 
-            val trainer = OnDeviceTrainer(numClasses, featureDim, labelsList)
+            val trainer = OnDeviceTrainer(effectiveNumClasses, effectiveFeatureDim, labelsList)
 
             try {
-                if (resolvedWeights.trim().startsWith("{")) {
-                    val root = JSONObject(resolvedWeights)
+                val trimmedW = resolvedWeights.trim()
+                if (trimmedW.startsWith("{")) {
+                    val root = JSONObject(trimmedW)
                     val archStr = root.optString("architecture", ModelArchitecture.DEEP_RESIDUAL_MLP.name)
                     trainer.architecture = try {
                         ModelArchitecture.valueOf(archStr)
@@ -1803,7 +1821,7 @@ class OnDeviceTrainer(
                         ModelArchitecture.DEEP_RESIDUAL_MLP
                     }
 
-                    if (trainer.architecture == ModelArchitecture.DEEP_RESIDUAL_MLP) {
+                    if (trainer.architecture == ModelArchitecture.DEEP_RESIDUAL_MLP && (root.has("w1") || root.has("w3"))) {
                         // Load Layer 1
                         if (root.has("w1")) {
                             val w1Arr = root.getJSONArray("w1")
@@ -1874,7 +1892,7 @@ class OnDeviceTrainer(
                         // Load Layer 3
                         if (root.has("w3")) {
                             val w3Arr = root.getJSONArray("w3")
-                            for (k in 0 until minOf(numClasses, w3Arr.length())) {
+                            for (k in 0 until minOf(effectiveNumClasses, w3Arr.length())) {
                                 val row = w3Arr.getJSONArray(k)
                                 for (j in 0 until minOf(trainer.h2Dim, row.length())) {
                                     trainer.w3[k][j] = row.getDouble(j).toFloat()
@@ -1883,11 +1901,11 @@ class OnDeviceTrainer(
                         }
                         if (root.has("b3")) {
                             val b3Arr = root.getJSONArray("b3")
-                            for (k in 0 until minOf(numClasses, b3Arr.length())) {
+                            for (k in 0 until minOf(effectiveNumClasses, b3Arr.length())) {
                                 trainer.b3[k] = b3Arr.getDouble(k).toFloat()
                             }
                         }
-                    } else if (trainer.architecture == ModelArchitecture.STANDARD_MLP) {
+                    } else if (trainer.architecture == ModelArchitecture.STANDARD_MLP && (root.has("w1") || root.has("w3"))) {
                         // Load Standard MLP
                         if (root.has("w1")) {
                             val w1Arr = root.getJSONArray("w1")
@@ -1906,7 +1924,7 @@ class OnDeviceTrainer(
                         }
                         if (root.has("w3")) {
                             val w3Arr = root.getJSONArray("w3")
-                            for (k in 0 until minOf(numClasses, w3Arr.length())) {
+                            for (k in 0 until minOf(effectiveNumClasses, w3Arr.length())) {
                                 val row = w3Arr.getJSONArray(k)
                                 for (j in 0 until minOf(trainer.h1Dim, row.length())) {
                                     trainer.w3[k][j] = row.getDouble(j).toFloat()
@@ -1915,49 +1933,92 @@ class OnDeviceTrainer(
                         }
                         if (root.has("b3")) {
                             val b3Arr = root.getJSONArray("b3")
-                            for (k in 0 until minOf(numClasses, b3Arr.length())) {
+                            for (k in 0 until minOf(effectiveNumClasses, b3Arr.length())) {
                                 trainer.b3[k] = b3Arr.getDouble(k).toFloat()
                             }
                         }
                     } else if (root.has("weights")) {
-                        val weightsRoot = root.getJSONArray("weights")
-                        for (k in 0 until numClasses) {
-                            if (k < weightsRoot.length()) {
-                                val classWeights = weightsRoot.getJSONArray(k)
-                                for (j in 0 until featureDim) {
-                                    if (j < classWeights.length()) {
-                                        trainer.weights[k][j] = classWeights.getDouble(j).toFloat()
+                        val weightsItem = root.get("weights")
+                        if (weightsItem is JSONArray) {
+                            if (weightsItem.length() > 0 && weightsItem.get(0) is JSONArray) {
+                                for (k in 0 until effectiveNumClasses) {
+                                    if (k < weightsItem.length()) {
+                                        val classWeights = weightsItem.getJSONArray(k)
+                                        for (j in 0 until effectiveFeatureDim) {
+                                            if (j < classWeights.length()) {
+                                                trainer.weights[k][j] = classWeights.getDouble(j).toFloat()
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // 1D flat array in weights
+                                val flatFloats = FloatArray(weightsItem.length()) { weightsItem.getDouble(it).toFloat() }
+                                for (k in 0 until effectiveNumClasses) {
+                                    for (j in 0 until effectiveFeatureDim) {
+                                        val srcIdx = (k * effectiveFeatureDim + j) % flatFloats.size
+                                        trainer.weights[k][j] = flatFloats.getOrElse(srcIdx) { 0.01f }
                                     }
                                 }
                             }
                         }
                         if (root.has("biases")) {
                             val bArr = root.getJSONArray("biases")
-                            for (b in 0 until minOf(numClasses, bArr.length())) {
+                            for (b in 0 until minOf(effectiveNumClasses, bArr.length())) {
                                 trainer.biases[b] = bArr.getDouble(b).toFloat()
                             }
                         }
                     }
-                } else {
-                    // Legacy linear model weights
+                } else if (trimmedW.startsWith("[")) {
+                    // Array of weights
                     trainer.architecture = ModelArchitecture.LINEAR
-                    val weightsRoot = JSONArray(resolvedWeights)
-                    for (k in 0 until numClasses) {
-                        if (k < weightsRoot.length()) {
-                            val classWeights = weightsRoot.getJSONArray(k)
-                            for (j in 0 until featureDim) {
-                                if (j < classWeights.length()) {
-                                    trainer.weights[k][j] = classWeights.getDouble(j).toFloat()
+                    val weightsRoot = JSONArray(trimmedW)
+                    if (weightsRoot.length() > 0 && weightsRoot.get(0) is JSONArray) {
+                        for (k in 0 until effectiveNumClasses) {
+                            if (k < weightsRoot.length()) {
+                                val classWeights = weightsRoot.getJSONArray(k)
+                                for (j in 0 until effectiveFeatureDim) {
+                                    if (j < classWeights.length()) {
+                                        trainer.weights[k][j] = classWeights.getDouble(j).toFloat()
+                                    }
                                 }
                             }
                         }
-                    }
-                    val biasArray = JSONArray(resolvedBiases)
-                    for (b in 0 until numClasses) {
-                        if (b < biasArray.length()) {
-                            trainer.biases[b] = biasArray.getDouble(b).toFloat()
+                    } else {
+                        // 1D flat array: [0.0954, 0.1348, ...]
+                        val flatFloats = FloatArray(weightsRoot.length()) { weightsRoot.getDouble(it).toFloat() }
+                        for (k in 0 until effectiveNumClasses) {
+                            for (j in 0 until effectiveFeatureDim) {
+                                val srcIdx = (k * effectiveFeatureDim + j) % flatFloats.size
+                                trainer.weights[k][j] = flatFloats.getOrElse(srcIdx) { 0.01f }
+                            }
                         }
                     }
+                } else if (trimmedW.isNotEmpty()) {
+                    // Raw string of floats e.g. "0.09545351,0.13480908,0.09676969..." or space/comma separated
+                    trainer.architecture = ModelArchitecture.LINEAR
+                    val parsedFloats = trimmedW.split(Regex("[\\s,;]+"))
+                        .mapNotNull { it.trim().toFloatOrNull() }
+
+                    if (parsedFloats.isNotEmpty()) {
+                        for (k in 0 until effectiveNumClasses) {
+                            for (j in 0 until effectiveFeatureDim) {
+                                val srcIdx = (k * effectiveFeatureDim + j) % parsedFloats.size
+                                trainer.weights[k][j] = parsedFloats.getOrElse(srcIdx) { 0.01f }
+                            }
+                        }
+                    }
+                }
+
+                if (resolvedBiases.trim().startsWith("[")) {
+                    try {
+                        val biasArray = JSONArray(resolvedBiases)
+                        for (b in 0 until effectiveNumClasses) {
+                            if (b < biasArray.length()) {
+                                trainer.biases[b] = biasArray.getDouble(b).toFloat()
+                            }
+                        }
+                    } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
                 e.printStackTrace()

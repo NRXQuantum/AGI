@@ -122,7 +122,24 @@ class ModelExporter(private val context: Context) {
             e.printStackTrace()
         }
 
-        // 6. Python Inference Helper Script (.py)
+        // 6. CSV Raw Weights Vector (.csv)
+        try {
+            val csvFile = File(exportDir, "${sanitizedProjectName}_weights.csv")
+            writeCsvWeightsFile(csvFile, model)
+            results.add(
+                ExportedModelResult(
+                    formatName = "CSV Weights Vector (.csv)",
+                    fileName = csvFile.name,
+                    filePath = csvFile.absolutePath,
+                    fileSizeFormatted = formatFileSize(csvFile.length()),
+                    description = "Plain comma-separated floating-point weight vectors for universal import."
+                )
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 7. Python Inference Helper Script (.py)
         try {
             val pyScriptFile = File(exportDir, "${sanitizedProjectName}_inference_helper.py")
             val scriptContent = generatePythonConversionScript(model, projectName)
@@ -161,6 +178,12 @@ class ModelExporter(private val context: Context) {
                 JSONObject(trimmed)
             } else if (trimmed.startsWith("[")) {
                 JSONArray(trimmed)
+            } else if (trimmed.contains(",")) {
+                val arr = JSONArray()
+                trimmed.split(Regex("[,;\\s]+")).mapNotNull { it.trim().toDoubleOrNull() }.forEach {
+                    arr.put(it)
+                }
+                arr
             } else {
                 trimmed
             }
@@ -182,6 +205,27 @@ class ModelExporter(private val context: Context) {
         root.put("scale_stds", safeParseJson(model.featureScaleStdsJson))
 
         file.writeText(root.toString(2), Charsets.UTF_8)
+    }
+
+    private fun writeCsvWeightsFile(file: File, model: TrainedModelEntity) {
+        val trainer = OnDeviceTrainer.loadFromModel(
+            weightsJson = model.weightsJson,
+            biasesJson = model.biasJson,
+            labelsJson = model.classLabelsJson,
+            numClasses = model.numClasses,
+            featureDim = model.featureDim,
+            scaleMeansJson = model.featureScaleMeansJson,
+            scaleStdsJson = model.featureScaleStdsJson
+        )
+        val sb = StringBuilder()
+        for (c in 0 until model.numClasses) {
+            val row = (0 until model.featureDim).map { d ->
+                trainer.weights.getOrNull(c)?.getOrNull(d) ?: 0f
+            }
+            sb.append(row.joinToString(","))
+            if (c < model.numClasses - 1) sb.append("\n")
+        }
+        file.writeText(sb.toString(), Charsets.UTF_8)
     }
 
     private fun extractClassLabels(model: TrainedModelEntity): List<String> {
